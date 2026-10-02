@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Removes stale Cargo build artifacts. Cargo never deletes superseded artifacts,
+# so target dirs grow without bound until the disk fills.
+set -uo pipefail
+
+usage() {
+  cat <<USAGE
+Usage: cargo-sweep-timer [--dry-run] [--help]
+
+Removes Cargo build artifacts older than SWEEP_DAYS days.
+
+Config file: \${CARGO_SWEEP_TIMER_CONFIG:-\${XDG_CONFIG_HOME:-~/.config}/cargo-sweep-timer/config.env}
+Variables already set in the environment override the config file.
+
+  SWEEP_DAYS         Age threshold in days (default: 1)
+  SWEEP_ROOTS        Colon-separated dirs searched for Cargo projects at any depth (default: ~/git)
+  SWEEP_TARGET_DIRS  Colon-separated target dirs outside any project, as set by CARGO_TARGET_DIR (default: none)
+  DRY_RUN            1 to only report what would be removed (default: 0)
+USAGE
+}
+
+for arg in "$@"; do
+  case $arg in
+    -n|--dry-run) DRY_RUN=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
+declare -A overrides
+for name in "${settings[@]}"; do
+  [[ -v $name ]] && overrides[$name]=${!name}
+done
+
+config=${CARGO_SWEEP_TIMER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cargo-sweep-timer/config.env}
+if [[ -f $config ]]; then
+  # shellcheck source=/dev/null
+  source "$config"
+fi
+
+for name in "${!overrides[@]}"; do
+  printf -v "$name" '%s' "${overrides[$name]}"
+done
+
+SWEEP_DAYS=${SWEEP_DAYS:-1}
+SWEEP_ROOTS=${SWEEP_ROOTS-$HOME/git}
+SWEEP_TARGET_DIRS=${SWEEP_TARGET_DIRS:-}
+DRY_RUN=${DRY_RUN:-0}
+
+if ! [[ $SWEEP_DAYS =~ ^[0-9]+$ ]]; then
+  echo "SWEEP_DAYS must be a whole number of days, got: $SWEEP_DAYS" >&2
+  exit 2
+fi
+if ! cargo sweep --version >/dev/null 2>&1; then
+  echo "cargo-sweep is not installed: https://github.com/holmgr/cargo-sweep" >&2
+  exit 1
+fi
+
+sweep_args=(--time "$SWEEP_DAYS")
+[[ $DRY_RUN == 1 ]] && sweep_args+=(--dry-run)
+
+failures=0
+
+IFS=: read -ra roots <<<"$SWEEP_ROOTS"
+for root in "${roots[@]}"; do
+  [[ -z $root ]] && continue
+  if [[ ! -d $root ]]; then
+    echo "skipping missing root: $root" >&2
+    continue
+  fi
+  # Worktrees often live in hidden dirs such as .worktrees, which --recursive skips by default.
+  cargo sweep "${sweep_args[@]}" --recursive --hidden "$root" || failures=$((failures + 1))
+done
+
+IFS=: read -ra target_dirs <<<"$SWEEP_TARGET_DIRS"
+if ((${#target_dirs[@]})); then
+  # cargo-sweep resolves the target dir through `cargo metadata`, which needs a project.
+  # An empty anchor project lets CARGO_TARGET_DIR alone pick which dir gets swept.
+  anchor=$(mktemp -d)
+  trap 'rm -rf "$anchor"' EXIT
+  mkdir "$anchor/src"
+  touch "$anchor/src/lib.rs"
+  printf '[package]\nname = "anchor"\nversion = "0.0.0"\nedition = "2021"\n' >"$anchor/Cargo.toml"
+
+  for target_dir in "${target_dirs[@]}"; do
+    [[ -z $target_dir ]] && continue
+    if [[ ! -d $target_dir ]]; then
+      echo "skipping missing target dir: $target_dir" >&2
+      continue
+    fi
+    CARGO_TARGET_DIR=$target_dir cargo sweep "${sweep_args[@]}" "$anchor" || failures=$((failures + 1))
+  done
+fi
+
+if ((failures)); then
+  echo "$failures sweep(s) failed" >&2
+  exit 1
+fi

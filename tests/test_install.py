@@ -69,3 +69,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"Environment: PATH={path}\n", result.stdout + result.stderr)
 
+    def test_uninstall_stops_service_before_removing_files(self):
+        calls = self.run_script("uninstall.sh")
+        stop = calls.index(["systemctl", "--user", "stop", "cargo-sweep-timer.service"])
+        remove = next(index for index, call in enumerate(calls) if call[0] == "rm")
+        self.assertLess(stop, remove)
+        self.assertLess(calls.index(["systemctl", "--user", "disable", "--now", "cargo-sweep-timer.timer"]), stop)

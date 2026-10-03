@@ -13,6 +13,7 @@ unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 config_dir=${XDG_CONFIG_HOME:-$HOME/.config}/cargo-sweep-timer
 
 systemctl --user disable --now cargo-sweep-timer.timer 2>/dev/null || true
+systemctl --user stop cargo-sweep-timer.service 2>/dev/null || true
 rm -f "$unit_dir/cargo-sweep-timer.service" "$unit_dir/cargo-sweep-timer.timer" "$HOME/.local/bin/cargo-sweep-timer"
 systemctl --user daemon-reload
 

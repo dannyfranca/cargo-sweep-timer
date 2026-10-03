@@ -4,7 +4,7 @@ Description=Daily sweep of stale Cargo build artifacts
 [Timer]
 OnCalendar=daily
 RandomizedDelaySec=15min
-# Runs a missed sweep at next boot, so a machine that is off at the scheduled time still gets swept.
+# A missed run must wait for the user manager, which usually starts at login.
 Persistent=true
 
 [Install]

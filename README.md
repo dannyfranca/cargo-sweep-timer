@@ -49,13 +49,15 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
 
-Bash reads the file, so `$HOME` expands. A variable that is already set in the environment overrides the file. To use a different file, set `CARGO_SWEEP_TIMER_CONFIG`.
+Bash reads the file, so `$HOME` expands. A variable that is already set in the environment overrides the file. To use a different file, set `CARGO_SWEEP_TIMER_CONFIG`. The command stops if this file is missing or the config fails to load.
 
 A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
 
 ### Schedule
 
-The timer runs once each day. If the computer is off at that time, the sweep runs at the next boot. To change the schedule, use a systemd drop-in:
+The timer runs once each day. If the computer is off at that time, the missed sweep runs when your systemd user manager next starts, usually at login. The timer can delay the sweep by up to 15 minutes. To run without a login, enable lingering with `loginctl enable-linger "$USER"`.
+
+To change the schedule, use a systemd drop-in:
 
 ```sh
 systemctl --user edit cargo-sweep-timer.timer
@@ -86,3 +88,7 @@ journalctl --user -u cargo-sweep-timer.service     # logs of the sweeps
 ./uninstall.sh           # keeps your config
 ./uninstall.sh --purge   # also removes ~/.config/cargo-sweep-timer
 ```
+
+## Test
+
+Run `python3 -m unittest discover -s tests`. The tests need Python 3, Cargo, and cargo-sweep. They use temporary projects and target dirs.

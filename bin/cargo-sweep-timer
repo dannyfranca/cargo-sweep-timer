@@ -81,6 +81,7 @@ for root in "${roots[@]}"; do
   [[ -z $root ]] && continue
   if [[ ! -d $root ]]; then
     echo "skipping missing root: $root" >&2
+    failures=$((failures + 1))
     continue
   fi
   # Worktrees often live in hidden dirs such as .worktrees, which --recursive skips by default.
@@ -101,6 +102,7 @@ if ((${#target_dirs[@]})); then
     [[ -z $target_dir ]] && continue
     if [[ ! -d $target_dir ]]; then
       echo "skipping missing target dir: $target_dir" >&2
+      failures=$((failures + 1))
       continue
     fi
     CARGO_TARGET_DIR=$target_dir sweep "${sweep_args[@]}" "$anchor"

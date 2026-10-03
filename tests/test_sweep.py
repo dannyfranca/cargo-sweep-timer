@@ -125,3 +125,17 @@ class SweepTests(unittest.TestCase):
                 result = self.run_script()
                 self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
                 self.assertEqual("1 sweep(s) failed" in result.stderr, expected_status == 1)
+
+    def test_missing_configured_paths_report_failure(self):
+        missing = str(self.root / "missing")
+        for setting, message in (
+            ("SWEEP_ROOTS", "skipping missing root:"),
+            ("SWEEP_TARGET_DIRS", "skipping missing target dir:"),
+        ):
+            with self.subTest(setting=setting):
+                self.env.update(SWEEP_ROOTS="", SWEEP_TARGET_DIRS="")
+                self.env[setting] = missing
+                result = self.run_script()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertIn("1 sweep(s) failed", result.stderr)

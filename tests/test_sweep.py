@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -95,16 +96,32 @@ class SweepTests(unittest.TestCase):
         self.assertIn("1 sweep(s) failed", result.stderr)
         self.assertFalse(artifact.exists())
 
-    def test_failed_cargo_command_reports_failure(self):
+    def stub_cargo(self, output, status):
         cargo = self.root / "cargo"
         cargo.write_text(
             '#!/usr/bin/env bash\n'
             '[[ $* == "sweep --version" ]] && exit 0\n'
-            'echo "sweep command failed" >&2\nexit 9\n'
+            f"printf '%s\\n' {shlex.quote(output)}\nexit {status}\n"
         )
         cargo.chmod(0o755)
         self.env.update(PATH=f"{self.root}:{self.env['PATH']}", SWEEP_ROOTS=str(self.root))
+
+    def test_failed_cargo_command_reports_failure(self):
+        self.stub_cargo("sweep command failed", 9)
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
         self.assertIn("sweep command failed", result.stdout)
         self.assertIn("1 sweep(s) failed", result.stderr)
+
+    def test_removal_warnings_report_failure(self):
+        warning = '[WARN] Failed to remove: "artifact" Permission denied (os error 13)'
+        for output, expected_status in (
+            (warning, 1),
+            (f"[INFO] Starting sweep\n{warning}", 1),
+            ("[WARN] Skipping missing target", 0),
+        ):
+            with self.subTest(output=output):
+                self.stub_cargo(output, 0)
+                result = self.run_script()
+                self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
+                self.assertEqual("1 sweep(s) failed" in result.stderr, expected_status == 1)

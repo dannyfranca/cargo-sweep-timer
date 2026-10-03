@@ -69,8 +69,9 @@ sweep() {
   local output status=0
   output=$(cargo sweep "$@" 2>&1) || status=$?
   [[ -z $output ]] || printf '%s\n' "$output"
-  # cargo-sweep 0.8.0 logs cleanup errors but still exits successfully.
-  if ((status)) || [[ $output == '[ERROR] '* || $output == *$'\n[ERROR] '* ]]; then
+  # cargo-sweep 0.8.0 can exit successfully after logging a cleanup failure.
+  if ((status)) || [[ $output == '[ERROR] '* || $output == *$'\n[ERROR] '* ||
+    $output == '[WARN] Failed to remove:'* || $output == *$'\n[WARN] Failed to remove:'* ]]; then
     failures=$((failures + 1))
   fi
 }

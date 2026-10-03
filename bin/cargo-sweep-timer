@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Removes stale Cargo build artifacts. Cargo never deletes superseded artifacts,
 # so target dirs grow without bound until the disk fills.
-set -uo pipefail
+set -euo pipefail
 
 usage() {
   cat <<USAGE
@@ -37,6 +37,9 @@ config=${CARGO_SWEEP_TIMER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cargo-sweep
 if [[ -f $config ]]; then
   # shellcheck source=/dev/null
   source "$config"
+elif [[ -n ${CARGO_SWEEP_TIMER_CONFIG:-} ]]; then
+  echo "config file not found: $config" >&2
+  exit 2
 fi
 
 for name in "${!overrides[@]}"; do

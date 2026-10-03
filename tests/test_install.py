@@ -32,6 +32,11 @@ class InstallTests(unittest.TestCase):
             'args = sys.argv[2:]\n'
             'with open(os.environ["COMMAND_LOG"], "a") as log:\n'
             '    log.write(json.dumps([command, *args]) + "\\n")\n'
+            'if command == "systemctl" and "stop" in args:\n'
+            '    sys.exit(int(os.environ.get("STOP_STATUS", "0")))\n'
+            'if command == "systemctl" and "show" in args:\n'
+            '    print(os.environ.get("SERVICE_STATE", "active"))\n'
+            '    sys.exit(int(os.environ.get("SHOW_STATUS", "0")))\n'
             'if command == "install" and args[-1] != str(Path.home() / ".local/bin/cargo-sweep-timer"):\n'
             '    os.execv(os.environ["REAL_INSTALL"], ["install", *args])\n'
         )
@@ -47,11 +52,11 @@ class InstallTests(unittest.TestCase):
             REAL_INSTALL=shutil.which("install"),
         )
 
-    def run_script(self, name):
+    def run_script(self, name, expected_status=0):
         result = subprocess.run(
             [str(REPO / name)], env=self.env, capture_output=True, text=True, timeout=10
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def test_installed_service_preserves_cargo_search_paths(self):
@@ -75,3 +80,16 @@ class InstallTests(unittest.TestCase):
         remove = next(index for index, call in enumerate(calls) if call[0] == "rm")
         self.assertLess(stop, remove)
         self.assertLess(calls.index(["systemctl", "--user", "disable", "--now", "cargo-sweep-timer.timer"]), stop)
+
+    def test_uninstall_keeps_files_when_stop_or_state_check_fails(self):
+        for state, show_status in (("active", "0"), ("inactive", "1")):
+            with self.subTest(state=state, show_status=show_status):
+                self.log.unlink(missing_ok=True)
+                self.env.update(STOP_STATUS="1", SERVICE_STATE=state, SHOW_STATUS=show_status)
+                calls = self.run_script("uninstall.sh", expected_status=1)
+                self.assertFalse(any(call[0] == "rm" for call in calls))
+
+    def test_uninstall_allows_an_already_inactive_service(self):
+        self.env.update(STOP_STATUS="1", SERVICE_STATE="inactive")
+        calls = self.run_script("uninstall.sh")
+        self.assertTrue(any(call[0] == "rm" for call in calls))

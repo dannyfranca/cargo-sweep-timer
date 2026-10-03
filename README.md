@@ -55,6 +55,8 @@ Bash reads the file, so `$HOME` expands. A variable that is already set in the e
 
 A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
 
+The command fails if a configured root is missing or cannot be read or searched. Cargo-sweep 0.8.0 can still skip nested dirs that it cannot read, or projects whose Cargo metadata fails to load. It does not report these search errors, so a successful run does not confirm that it found every project.
+
 ### Schedule
 
 The timer runs once each day. If the computer is off at that time, the missed sweep runs when your systemd user manager next starts, usually at login. The timer can delay the sweep by up to 15 minutes. To run without a login, enable lingering with `loginctl enable-linger "$USER"`.

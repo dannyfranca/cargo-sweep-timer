@@ -161,3 +161,19 @@ class SweepTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(message, result.stderr)
                 self.assertIn("1 sweep(s) failed", result.stderr)
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
+    def test_unreadable_or_unsearchable_roots_report_failure(self):
+        directory = self.root / "restricted"
+        directory.mkdir()
+        self.env["SWEEP_ROOTS"] = str(directory)
+        for mode in (0o111, 0o444):
+            with self.subTest(mode=mode):
+                directory.chmod(mode)
+                try:
+                    result = self.run_script()
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("cannot read or search root:", result.stderr)
+                    self.assertIn("1 sweep(s) failed", result.stderr)
+                finally:
+                    directory.chmod(0o700)

@@ -89,6 +89,11 @@ for root in "${roots[@]}"; do
     failures=$((failures + 1))
     continue
   fi
+  if [[ ! -r $root || ! -x $root ]]; then
+    echo "cannot read or search root: $root" >&2
+    failures=$((failures + 1))
+    continue
+  fi
   # Worktrees often live in hidden dirs such as .worktrees, which --recursive skips by default.
   sweep "${sweep_args[@]}" --recursive --hidden "$root"
 done

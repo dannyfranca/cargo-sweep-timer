@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 import shlex
+import selectors
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -96,12 +98,13 @@ class SweepTests(unittest.TestCase):
         self.assertIn("1 sweep(s) failed", result.stderr)
         self.assertFalse(artifact.exists())
 
-    def stub_cargo(self, output, status):
+    def stub_cargo(self, output, status, wait_for_input=False):
         cargo = self.root / "cargo"
+        wait = "read -r confirmation\n" if wait_for_input else ""
         cargo.write_text(
             '#!/usr/bin/env bash\n'
             '[[ $* == "sweep --version" ]] && exit 0\n'
-            f"printf '%s\\n' {shlex.quote(output)}\nexit {status}\n"
+            f"printf '%s\\n' {shlex.quote(output)}\n{wait}exit {status}\n"
         )
         cargo.chmod(0o755)
         self.env.update(PATH=f"{self.root}:{self.env['PATH']}", SWEEP_ROOTS=str(self.root))
@@ -112,6 +115,25 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("sweep command failed", result.stdout)
         self.assertIn("1 sweep(s) failed", result.stderr)
+
+    def test_logs_are_visible_before_cargo_exits(self):
+        self.stub_cargo("[INFO] Sweep started", 0, wait_for_input=True)
+        process = subprocess.Popen(
+            [str(SCRIPT)], env=self.env, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(timeout=5), "Sweep output was buffered")
+            self.assertEqual(process.stdout.readline(), "[INFO] Sweep started\n")
+            self.assertIsNone(process.poll())
+            stdout, stderr = process.communicate("continue\n", timeout=10)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+            process.communicate(timeout=10)
 
     def test_removal_warnings_report_failure(self):
         warning = '[WARN] Failed to remove: "artifact" Permission denied (os error 13)'

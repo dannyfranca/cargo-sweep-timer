@@ -25,6 +25,8 @@ The installer does these steps:
 3. It creates `~/.config/cargo-sweep-timer/config.env` from `config.example.env`. If this file exists, it does not change it.
 4. It enables and starts the timer.
 
+The service uses the `PATH` from the install command, with `$CARGO_HOME/bin` added if `CARGO_HOME` is set. If you change the Cargo location, run the installer again.
+
 To update, pull the repo and run `./install.sh` again.
 
 ## Configure
@@ -91,4 +93,4 @@ journalctl --user -u cargo-sweep-timer.service     # logs of the sweeps
 
 ## Test
 
-Run `python3 -m unittest discover -s tests`. The tests need Python 3, Cargo, and cargo-sweep. They use temporary projects and target dirs.
+Run `python3 -m unittest discover -s tests`. The tests need Python 3, Cargo, cargo-sweep, and systemd-analyze. They use temporary projects and target dirs.

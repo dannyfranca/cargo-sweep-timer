@@ -14,6 +14,13 @@ fi
 install -Dm755 "$repo/bin/cargo-sweep-timer" "$bin_dir/cargo-sweep-timer"
 install -Dm644 -t "$unit_dir" "$repo/systemd/cargo-sweep-timer.service" "$repo/systemd/cargo-sweep-timer.timer"
 
+# Scheduled runs must find the Cargo installation that passed the check above.
+service_path=${CARGO_HOME:+$CARGO_HOME/bin:}$PATH
+service_path=${service_path//\\/\\\\}
+service_path=${service_path//\"/\\\"}
+service_path=${service_path//%/%%}
+printf '\nEnvironment="PATH=%s"\n' "$service_path" >>"$unit_dir/cargo-sweep-timer.service"
+
 if [[ -f $config_dir/config.env ]]; then
   echo "keeping existing config: $config_dir/config.env"
 else

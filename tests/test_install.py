@@ -124,6 +124,13 @@ class InstallTests(unittest.TestCase):
         self.run_script("install.sh")
         self.assertTrue((self.home / "Library/Logs").is_dir())
 
+    def test_macos_install_keeps_files_when_old_agent_stays_loaded(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1")
+        calls = self.run_script("install.sh", expected_status=1)
+        self.assertFalse(any(call[0] == "install" for call in calls))
+        self.assertFalse(any(call[:2] == ["launchctl", "bootstrap"] for call in calls))
+        self.assertFalse(self.agent_plist().exists())
+
     def test_macos_uninstall_unloads_agent_before_removing_files(self):
         self.env.update(UNAME="Darwin")
         calls = self.run_script("uninstall.sh")

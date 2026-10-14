@@ -37,6 +37,17 @@ xml_escape() {
   printf '%s' "$value"
 }
 
+unload_launchd() {
+  local service=gui/$(id -u)/$label status=0
+  launchctl bootout "$service" 2>/dev/null && return
+  launchctl print "$service" >/dev/null 2>&1 || status=$?
+  # launchctl print exits 113 only when the service is not loaded; any other result leaves its state unknown.
+  if ((status != 113)); then
+    echo "could not unload $service" >&2
+    exit 1
+  fi
+}
+
 install_launchd() {
   local plist
   plist=$(<"$repo/launchd/$label.plist")
@@ -46,11 +57,16 @@ install_launchd() {
   plist=${plist//@CONFIG@/"$(xml_escape "$config_dir/config.env")"}
   mkdir -p "$agent_dir" "$HOME/Library/Logs"
   printf '%s\n' "$plist" >"$agent_dir/$label.plist"
-
-  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$agent_dir/$label.plist"
   echo "scheduled daily at 00:00, logs: $HOME/Library/Logs/cargo-sweep-timer.log"
 }
+
+platform=$(uname)
+
+# A loaded agent keeps its old schedule, so stop before the files change under it.
+if [[ $platform == Darwin ]]; then
+  unload_launchd
+fi
 
 mkdir -p "$bin_dir"
 install -m755 "$repo/bin/cargo-sweep-timer" "$bin_dir/cargo-sweep-timer"
@@ -63,7 +79,7 @@ else
   echo "created config: $config_dir/config.env"
 fi
 
-if [[ $(uname) == Darwin ]]; then
+if [[ $platform == Darwin ]]; then
   install_launchd
 else
   install_systemd

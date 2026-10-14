@@ -4,8 +4,10 @@
 <dict>
   <key>Label</key>
   <string>com.dannyfranca.cargo-sweep-timer</string>
+  <!-- A fixed bash keeps the Full Disk Access grant stable when Homebrew bash is on PATH. -->
   <key>ProgramArguments</key>
   <array>
+    <string>/bin/bash</string>
     <string>@HOME@/.local/bin/cargo-sweep-timer</string>
   </array>
   <key>EnvironmentVariables</key>

@@ -111,7 +111,7 @@ class InstallTests(unittest.TestCase):
         calls = self.run_script("install.sh")
         with self.agent_plist().open("rb") as plist:
             agent = plistlib.load(plist)
-        self.assertEqual(agent["ProgramArguments"], [f"{self.home}/.local/bin/cargo-sweep-timer"])
+        self.assertEqual(agent["ProgramArguments"], ["/bin/bash", f"{self.home}/.local/bin/cargo-sweep-timer"])
         self.assertEqual(agent["EnvironmentVariables"], {
             "PATH": f"{self.env['CARGO_HOME']}/bin:{self.env['PATH']}",
             "XDG_CONFIG_HOME": str(self.config_home),

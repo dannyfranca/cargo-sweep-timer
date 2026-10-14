@@ -12,8 +12,8 @@
   <dict>
     <key>PATH</key>
     <string>@PATH@</string>
-    <key>CARGO_SWEEP_TIMER_CONFIG</key>
-    <string>@CONFIG@</string>
+    <key>XDG_CONFIG_HOME</key>
+    <string>@CONFIG_HOME@</string>
   </dict>
   <!-- A run missed during sleep starts on wake. A run missed while powered off is skipped. -->
   <key>StartCalendarInterval</key>

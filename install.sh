@@ -53,8 +53,8 @@ install_launchd() {
   plist=$(<"$repo/launchd/$label.plist")
   plist=${plist//@HOME@/"$(xml_escape "$HOME")"}
   plist=${plist//@PATH@/"$(xml_escape "$service_path")"}
-  # launchd does not set XDG_CONFIG_HOME, so pin the config this installer wrote.
-  plist=${plist//@CONFIG@/"$(xml_escape "$config_dir/config.env")"}
+  # launchd does not set XDG_CONFIG_HOME, so pin the one this installer used.
+  plist=${plist//@CONFIG_HOME@/"$(xml_escape "${XDG_CONFIG_HOME:-$HOME/.config}")"}
   mkdir -p "$agent_dir" "$HOME/Library/Logs"
   printf '%s\n' "$plist" >"$agent_dir/$label.plist"
   launchctl bootstrap "gui/$(id -u)" "$agent_dir/$label.plist"

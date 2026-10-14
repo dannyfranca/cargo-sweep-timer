@@ -98,6 +98,30 @@ class SweepTests(unittest.TestCase):
         self.assertIn("1 sweep(s) failed", result.stderr)
         self.assertFalse(artifact.exists())
 
+    def test_projects_that_need_their_own_cargo_config_are_swept(self):
+        project = self.create_project(self.root / "projects" / "private")
+        artifact = self.build_project(project, project / "target")
+        (project / ".cargo").mkdir()
+        (project / ".cargo" / "config.toml").write_text(
+            '[registries.private]\nindex = "sparse+https://registry.invalid/"\n'
+        )
+        with (project / "Cargo.toml").open("a") as manifest:
+            manifest.write('[dependencies]\nprivate-dep = { version = "1", registry = "private" }\n')
+        self.env["SWEEP_ROOTS"] = str(self.root / "projects")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(artifact.exists())
+
+    def test_only_target_dirs_tagged_by_cargo_are_swept(self):
+        self.stub_cargo("", 0)
+        (self.root / "cargo").write_text(
+            '#!/usr/bin/env bash\n[[ $* == "sweep --version" ]] && exit 0\necho "swept $CARGO_TARGET_DIR"\n'
+        )
+        (self.root / "untagged" / "target").mkdir(parents=True)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
     def stub_cargo(self, output, status, wait_for_input=False):
         cargo = self.root / "cargo"
         wait = "read -r confirmation\n" if wait_for_input else ""
@@ -107,6 +131,9 @@ class SweepTests(unittest.TestCase):
             f"printf '%s\\n' {shlex.quote(output)}\n{wait}exit {status}\n"
         )
         cargo.chmod(0o755)
+        target = self.root / "project" / "target"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "CACHEDIR.TAG").touch()
         self.env.update(PATH=f"{self.root}:{self.env['PATH']}", SWEEP_ROOTS=str(self.root))
 
     def test_failed_cargo_command_reports_failure(self):

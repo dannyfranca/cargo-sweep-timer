@@ -28,9 +28,9 @@ for arg in "$@"; do
 done
 
 settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
-declare -A overrides
+# macOS ships bash 3.2, which lacks associative arrays and [[ -v ]].
 for name in "${settings[@]}"; do
-  [[ -v $name ]] && overrides[$name]=${!name}
+  [[ -n ${!name+set} ]] && printf -v "override_$name" '%s' "${!name}"
 done
 
 config=${CARGO_SWEEP_TIMER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cargo-sweep-timer/config.env}
@@ -42,8 +42,9 @@ elif [[ -n ${CARGO_SWEEP_TIMER_CONFIG:-} ]]; then
   exit 2
 fi
 
-for name in "${!overrides[@]}"; do
-  printf -v "$name" '%s' "${overrides[$name]}"
+for name in "${settings[@]}"; do
+  override=override_$name
+  [[ -n ${!override+set} ]] && printf -v "$name" '%s' "${!override}"
 done
 
 SWEEP_DAYS=${SWEEP_DAYS:-1}
@@ -82,7 +83,8 @@ sweep() {
 }
 
 IFS=: read -ra roots <<<"$SWEEP_ROOTS"
-for root in "${roots[@]}"; do
+# bash 3.2 treats an empty array as unset under set -u.
+for root in ${roots[@]+"${roots[@]}"}; do
   [[ -z $root ]] && continue
   if [[ ! -d $root ]]; then
     echo "skipping missing root: $root" >&2

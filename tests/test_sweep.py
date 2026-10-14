@@ -46,7 +46,7 @@ class SweepTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         artifacts = [path for path in (target / "debug" / "deps").glob("sweep_fixture-*")
-                     if path.suffix != ".d"]
+                     if "." not in path.name]
         self.assertEqual(len(artifacts), 1)
         artifact = artifacts[0]
         self.assertTrue(artifact.is_file())

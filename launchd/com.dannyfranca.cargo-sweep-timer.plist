@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dannyfranca.cargo-sweep-timer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@HOME@/.local/bin/cargo-sweep-timer</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <key>CARGO_SWEEP_TIMER_CONFIG</key>
+    <string>@CONFIG@</string>
+  </dict>
+  <!-- A run missed during sleep starts on wake. A run missed while powered off is skipped. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>0</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <!-- Sweeping hundreds of GB can take long; background priority keeps it out of the way. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/cargo-sweep-timer.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/cargo-sweep-timer.log</string>
+</dict>
+</plist>

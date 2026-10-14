@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import shlex
 import shutil
 import subprocess
@@ -37,14 +38,20 @@ class InstallTests(unittest.TestCase):
             'if command == "systemctl" and "show" in args:\n'
             '    print(os.environ.get("SERVICE_STATE", "active"))\n'
             '    sys.exit(int(os.environ.get("SHOW_STATUS", "0")))\n'
+            'if command == "uname":\n'
+            '    print(os.environ.get("UNAME", "Linux"))\n'
+            'if command == "launchctl" and args[0] in ("bootout", "print"):\n'
+            '    sys.exit(int(os.environ.get(args[0].upper() + "_STATUS", "0")))\n'
             'if command == "install" and args[-1] != str(Path.home() / ".local/bin/cargo-sweep-timer"):\n'
             '    os.execv(os.environ["REAL_INSTALL"], ["install", *args])\n'
         )
-        for command in ("cargo", "systemctl", "install", "rm"):
+        for command in ("cargo", "systemctl", "launchctl", "uname", "install", "rm"):
             (self.commands / command).symlink_to(stub)
         self.config_home = self.root / "config"
+        self.home = self.root / "home"
         self.env = os.environ.copy()
         self.env.update(
+            HOME=str(self.home),
             PATH=f"{self.commands}:{self.env['PATH']}",
             XDG_CONFIG_HOME=str(self.config_home),
             CARGO_HOME=str(self.root / "custom cargo"),
@@ -59,6 +66,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "needs systemd-analyze")
     def test_installed_service_preserves_cargo_search_paths(self):
         self.run_script("install.sh")
         service = self.config_home / "systemd/user/cargo-sweep-timer.service"
@@ -93,3 +101,54 @@ class InstallTests(unittest.TestCase):
         self.env.update(STOP_STATUS="1", SERVICE_STATE="inactive")
         calls = self.run_script("uninstall.sh")
         self.assertTrue(any(call[0] == "rm" for call in calls))
+
+    def agent_plist(self):
+        return self.home / "Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist"
+
+    def test_macos_agent_preserves_cargo_search_paths_and_config(self):
+        self.env.update(UNAME="Darwin", HOME=str(self.root / "home & <dir>"))
+        self.home = Path(self.env["HOME"])
+        calls = self.run_script("install.sh")
+        with self.agent_plist().open("rb") as plist:
+            agent = plistlib.load(plist)
+        self.assertEqual(agent["ProgramArguments"], [f"{self.home}/.local/bin/cargo-sweep-timer"])
+        self.assertEqual(agent["EnvironmentVariables"], {
+            "PATH": f"{self.env['CARGO_HOME']}/bin:{self.env['PATH']}",
+            "CARGO_SWEEP_TIMER_CONFIG": f"{self.config_home}/cargo-sweep-timer/config.env",
+        })
+        self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(self.agent_plist())], calls)
+        self.assertFalse(any(call[0] == "systemctl" for call in calls))
+
+    def test_macos_install_creates_the_agent_log_dir(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="3", PRINT_STATUS="113")
+        self.run_script("install.sh")
+        self.assertTrue((self.home / "Library/Logs").is_dir())
+
+    def test_macos_install_keeps_files_when_old_agent_stays_loaded(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1")
+        calls = self.run_script("install.sh", expected_status=1)
+        self.assertFalse(any(call[0] == "install" for call in calls))
+        self.assertFalse(any(call[:2] == ["launchctl", "bootstrap"] for call in calls))
+        self.assertFalse(self.agent_plist().exists())
+
+    def test_macos_uninstall_unloads_agent_before_removing_files(self):
+        self.env.update(UNAME="Darwin")
+        calls = self.run_script("uninstall.sh")
+        unload = calls.index(["launchctl", "bootout", f"gui/{os.getuid()}/com.dannyfranca.cargo-sweep-timer"])
+        remove = next(index for index, call in enumerate(calls) if call[0] == "rm")
+        self.assertLess(unload, remove)
+
+    def test_macos_uninstall_keeps_files_when_agent_stays_loaded(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1")
+        calls = self.run_script("uninstall.sh", expected_status=1)
+        self.assertFalse(any(call[0] == "rm" for call in calls))
+
+    def test_macos_uninstall_allows_an_unloaded_agent(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="113", PRINT_STATUS="113")
+        calls = self.run_script("uninstall.sh")
+        self.assertTrue(any(call[0] == "rm" for call in calls))
+
+    def test_macos_uninstall_keeps_files_when_agent_state_is_unknown(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1", PRINT_STATUS="1")
+        calls = self.run_script("uninstall.sh", expected_status=1)
+        self.assertFalse(any(call[0] == "rm" for call in calls))

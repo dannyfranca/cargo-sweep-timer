@@ -147,3 +147,8 @@ class InstallTests(unittest.TestCase):
         self.env.update(UNAME="Darwin", BOOTOUT_STATUS="113", PRINT_STATUS="113")
         calls = self.run_script("uninstall.sh")
         self.assertTrue(any(call[0] == "rm" for call in calls))
+
+    def test_macos_uninstall_keeps_files_when_agent_state_is_unknown(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1", PRINT_STATUS="1")
+        calls = self.run_script("uninstall.sh", expected_status=1)
+        self.assertFalse(any(call[0] == "rm" for call in calls))

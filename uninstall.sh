@@ -27,12 +27,19 @@ uninstall_systemd() {
   systemctl --user daemon-reload
 }
 
-uninstall_launchd() {
-  local service=gui/$(id -u)/$label
-  if ! launchctl bootout "$service" 2>/dev/null && launchctl print "$service" >/dev/null 2>&1; then
+unload_launchd() {
+  local service=gui/$(id -u)/$label status=0
+  launchctl bootout "$service" 2>/dev/null && return
+  launchctl print "$service" >/dev/null 2>&1 || status=$?
+  # launchctl print exits 113 only when the service is not loaded; any other result leaves its state unknown.
+  if ((status != 113)); then
     echo "could not unload $service" >&2
     exit 1
   fi
+}
+
+uninstall_launchd() {
+  unload_launchd
   rm -f "$agent_dir/$label.plist" "$HOME/.local/bin/cargo-sweep-timer"
 }
 

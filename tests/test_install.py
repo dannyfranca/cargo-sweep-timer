@@ -119,6 +119,11 @@ class InstallTests(unittest.TestCase):
         self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(self.agent_plist())], calls)
         self.assertFalse(any(call[0] == "systemctl" for call in calls))
 
+    def test_macos_install_creates_the_agent_log_dir(self):
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="3", PRINT_STATUS="113")
+        self.run_script("install.sh")
+        self.assertTrue((self.home / "Library/Logs").is_dir())
+
     def test_macos_uninstall_unloads_agent_before_removing_files(self):
         self.env.update(UNAME="Darwin")
         calls = self.run_script("uninstall.sh")

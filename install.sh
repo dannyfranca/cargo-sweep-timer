@@ -44,7 +44,7 @@ install_launchd() {
   plist=${plist//@PATH@/"$(xml_escape "$service_path")"}
   # launchd does not set XDG_CONFIG_HOME, so pin the config this installer wrote.
   plist=${plist//@CONFIG@/"$(xml_escape "$config_dir/config.env")"}
-  mkdir -p "$agent_dir"
+  mkdir -p "$agent_dir" "$HOME/Library/Logs"
   printf '%s\n' "$plist" >"$agent_dir/$label.plist"
 
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true

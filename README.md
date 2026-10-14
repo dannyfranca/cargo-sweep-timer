@@ -2,11 +2,11 @@
 
 Cargo does not delete old build artifacts. Each `target` dir grows until the disk is full. Worktrees make this worse, because each worktree has its own `target` dir.
 
-This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer. It removes artifacts that were not used for a set number of days.
+This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer on Linux, or a launchd agent on macOS. It removes artifacts that were not used for a set number of days.
 
 ## Requirements
 
-- Linux with systemd
+- Linux with systemd, or macOS
 - Cargo
 - cargo-sweep: `cargo install cargo-sweep`. Some distros also have a package, for example `pacman -S cargo-sweep`.
 
@@ -21,11 +21,11 @@ cd cargo-sweep-timer
 The installer does these steps:
 
 1. It copies the script to `~/.local/bin/cargo-sweep-timer`.
-2. It copies the service and timer units to `~/.config/systemd/user/`.
-3. It creates `~/.config/cargo-sweep-timer/config.env` from `config.example.env`. If this file exists, it does not change it.
-4. It enables and starts the timer.
+2. It creates `~/.config/cargo-sweep-timer/config.env` from `config.example.env`. If this file exists, it does not change it.
+3. On Linux, it copies the service and timer units to `~/.config/systemd/user/`, then enables and starts the timer.
+4. On macOS, it writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist`, then loads it.
 
-The service uses the `PATH` from the install command, with `$CARGO_HOME/bin` added if `CARGO_HOME` is set. If you change the Cargo location, run the installer again.
+The scheduled job uses the `PATH` from the install command, with `$CARGO_HOME/bin` added if `CARGO_HOME` is set. If you change the Cargo location, run the installer again.
 
 To update, pull the repo and run `./install.sh` again.
 
@@ -75,6 +75,14 @@ OnCalendar=*-*-* 11:30:00
 
 The empty `OnCalendar=` line removes the default schedule. Without it, systemd keeps both schedules.
 
+### Schedule on macOS
+
+The agent runs each day at 00:00. If the Mac sleeps at that time, the sweep runs when it wakes. If the Mac is off at that time, launchd skips the sweep until the next day. The agent runs only while you are logged in.
+
+To change the schedule, edit `StartCalendarInterval` in `launchd/com.dannyfranca.cargo-sweep-timer.plist`, then run `./install.sh` again.
+
+If a sweep root is in `~/Documents`, `~/Desktop`, or `~/Downloads`, macOS blocks access from the agent. Give `/bin/bash` Full Disk Access in System Settings, or use a root outside these dirs.
+
 ## Use
 
 ```sh
@@ -86,6 +94,14 @@ systemctl --user list-timers cargo-sweep-timer.timer
 journalctl --user -u cargo-sweep-timer.service     # logs of the sweeps
 ```
 
+On macOS:
+
+```sh
+launchctl kickstart gui/$(id -u)/com.dannyfranca.cargo-sweep-timer   # sweep now, through launchd
+launchctl print gui/$(id -u)/com.dannyfranca.cargo-sweep-timer       # agent state and last exit code
+tail -f ~/Library/Logs/cargo-sweep-timer.log                          # logs of the sweeps
+```
+
 ## Uninstall
 
 ```sh
@@ -95,4 +111,4 @@ journalctl --user -u cargo-sweep-timer.service     # logs of the sweeps
 
 ## Test
 
-Run `python3 -m unittest discover -s tests`. The tests need Python 3, Cargo, cargo-sweep, and systemd-analyze. They use temporary projects and target dirs.
+Run `python3 -m unittest discover -s tests`. The tests need Python 3, Cargo, and cargo-sweep. The systemd unit test also needs systemd-analyze, and it is skipped without it. They use temporary projects and target dirs.

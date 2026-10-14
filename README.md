@@ -53,7 +53,7 @@ Edit `~/.config/cargo-sweep-timer/config.env`:
 # Remove artifacts not used for this many days.
 SWEEP_DAYS=1
 
-# Colon-separated dirs searched for Cargo projects at any depth, hidden dirs included.
+# Colon-separated dirs searched for Cargo target dirs at any depth, hidden dirs included.
 SWEEP_ROOTS="$HOME/git"
 
 # Colon-separated target dirs that live outside any project (CARGO_TARGET_DIR builds).
@@ -63,7 +63,7 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SWEEP_DAYS` | `1` | Remove artifacts not used for this many days. |
-| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo projects. The search includes hidden dirs such as `.worktrees`. |
+| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs. The search includes hidden dirs such as `.worktrees`. |
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
 
@@ -71,7 +71,9 @@ Bash reads the file, so `$HOME` expands. A variable that is already set in the e
 
 A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
 
-The command fails if a configured root is missing or cannot be read or searched. Cargo-sweep 0.8.0 can still skip nested dirs that it cannot read, or projects whose Cargo metadata fails to load. It does not report these search errors, so a successful run does not confirm that it found every project.
+The command fails if a configured root is missing, or if a dir in it cannot be read or searched.
+
+In a root, the command sweeps each dir named `target` that contains the `CACHEDIR.TAG` file that Cargo writes. It does not load the projects, so a project that needs its own `.cargo/config.toml`, for example for a private registry, is swept too. A project that sets a different target dir name in its Cargo config is not found. Add that dir to `SWEEP_TARGET_DIRS`.
 
 ## Use on all systems
 

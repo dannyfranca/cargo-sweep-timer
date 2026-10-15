@@ -166,6 +166,20 @@ class InstallTests(unittest.TestCase):
         calls = self.run_script("uninstall.sh", expected_status=1)
         self.assertFalse(any(call[0] == "rm" for call in calls))
 
+    def test_macos_uninstall_waits_for_the_agent_to_exit(self):
+        self.env.update(UNAME="Darwin", PRINT_LOADED_CALLS="3")
+        calls = self.run_script("uninstall.sh")
+        prints = [index for index, call in enumerate(calls) if call[:2] == ["launchctl", "print"]]
+        remove = next(index for index, call in enumerate(calls) if call[0] == "rm")
+        self.assertEqual(len(prints), 4)
+        self.assertLess(prints[-1], remove)
+
+    def test_macos_uninstall_keeps_files_when_the_agent_does_not_exit(self):
+        self.env.update(UNAME="Darwin", PRINT_STATUS="0")
+        # The wait polls launchctl 50 times, and each stub call starts Python.
+        calls = self.run_script("uninstall.sh", expected_status=1, timeout=60)
+        self.assertFalse(any(call[0] == "rm" for call in calls))
+
     def test_macos_uninstall_allows_an_unloaded_agent(self):
         self.env.update(UNAME="Darwin", BOOTOUT_STATUS="113", PRINT_STATUS="113")
         calls = self.run_script("uninstall.sh")

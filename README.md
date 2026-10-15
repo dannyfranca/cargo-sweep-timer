@@ -19,7 +19,7 @@ The script, the config, and the commands in [Configure](#configure) and [Use on 
 If you set `XDG_CONFIG_HOME`, `~/.config` in this README means that dir. Set the same value when you run `install.sh` and `uninstall.sh`, because each script finds its files from the value at run time.
 
 - On Linux, the systemd user manager must have the same value. The manager finds the timer units from its own `XDG_CONFIG_HOME`, and the service does not set it for the sweep. If the values are different, the installer cannot enable the timer, or the scheduled sweep cannot find your config.
-- On macOS, the agent always reads the config file that the installer created.
+- On macOS, the installer writes its `XDG_CONFIG_HOME` value into the agent, so the agent finds your config.
 
 ## Requirements
 
@@ -134,7 +134,7 @@ The uninstaller disables the timer and stops the sweep service. Then it removes 
 
 ### Install on macOS
 
-The installer writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist`, then loads it. launchd does not set `XDG_CONFIG_HOME`, so the agent always reads the config file that the installer created.
+The installer writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist`, then loads it. launchd does not set `XDG_CONFIG_HOME`, so the installer writes its value into the agent.
 
 ### Schedule on macOS
 

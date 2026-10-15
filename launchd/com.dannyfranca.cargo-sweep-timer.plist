@@ -23,9 +23,9 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>0</integer>
+    <integer>@HOUR@</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>@MINUTE@</integer>
   </dict>
   <!-- Sweeping hundreds of GB can take long; background priority keeps it out of the way. -->
   <key>ProcessType</key>

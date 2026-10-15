@@ -18,7 +18,10 @@ service_path=${CARGO_HOME:+$CARGO_HOME/bin:}$PATH
 
 install_systemd() {
   mkdir -p "$unit_dir"
-  install -m644 "$repo/systemd/cargo-sweep-timer.service" "$repo/systemd/cargo-sweep-timer.timer" "$unit_dir"
+  install -m644 "$repo/systemd/cargo-sweep-timer.service" "$unit_dir"
+  local timer
+  timer=$(<"$repo/systemd/cargo-sweep-timer.timer")
+  printf '%s\n' "${timer//@TIME@/$sweep_time}" >"$unit_dir/cargo-sweep-timer.timer"
 
   service_path=${service_path//\\/\\\\}
   service_path=${service_path//\"/\\\"}
@@ -63,13 +66,34 @@ install_launchd() {
   plist=${plist//@PATH@/"$(xml_escape "$service_path")"}
   # launchd does not set XDG_CONFIG_HOME, so pin the one this installer used.
   plist=${plist//@CONFIG_HOME@/"$(xml_escape "${XDG_CONFIG_HOME:-$HOME/.config}")"}
+  plist=${plist//@HOUR@/$sweep_hour}
+  plist=${plist//@MINUTE@/$sweep_minute}
   mkdir -p "$agent_dir" "$HOME/Library/Logs"
   printf '%s\n' "$plist" >"$agent_dir/$label.plist"
   launchctl bootstrap "gui/$(id -u)" "$agent_dir/$label.plist"
-  echo "scheduled daily at 00:00, logs: $HOME/Library/Logs/cargo-sweep-timer.log"
+  echo "scheduled daily at $sweep_time, logs: $HOME/Library/Logs/cargo-sweep-timer.log"
 }
 
 platform=$(uname)
+
+# systemd and launchd cannot read the config, so the installer copies the time into them.
+# It loads the config the way the sweep does, so a config that would stop the sweep stops
+# the install before it changes anything. A new process keeps set -e active in the config.
+config=$config_dir/config.env
+[[ -f $config ]] || config=$repo/config.example.env
+if ! config_time=$(bash -euo pipefail -c 'source "$1" >/dev/null; printf "%s" "${SWEEP_TIME:-}"' bash "$config"); then
+  echo "could not load config: $config" >&2
+  exit 1
+fi
+sweep_time=${SWEEP_TIME-$config_time}
+sweep_time=${sweep_time:-10:00}
+if ! [[ $sweep_time =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+  echo "SWEEP_TIME must be HH:MM in 24-hour time, got: $sweep_time. Using 10:00." >&2
+  sweep_time=10:00
+fi
+sweep_hour=$((10#${sweep_time%:*}))
+sweep_minute=$((10#${sweep_time#*:}))
+printf -v sweep_time '%02d:%02d' "$sweep_hour" "$sweep_minute"
 
 # A loaded agent keeps its old schedule, so stop before the files change under it.
 if [[ $platform == Darwin ]]; then

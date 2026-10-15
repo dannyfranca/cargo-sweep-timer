@@ -2,7 +2,7 @@
 Description=Daily sweep of stale Cargo build artifacts
 
 [Timer]
-OnCalendar=daily
+OnCalendar=*-*-* @TIME@:00
 RandomizedDelaySec=15min
 # A missed run must wait for the user manager, which usually starts at login.
 Persistent=true

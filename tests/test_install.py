@@ -57,6 +57,7 @@ class InstallTests(unittest.TestCase):
         self.config_home = self.root / "config"
         self.home = self.root / "home"
         self.env = os.environ.copy()
+        self.env.pop("SWEEP_TIME", None)
         self.env.update(
             HOME=str(self.home),
             PATH=f"{self.commands}:{self.env['PATH']}",
@@ -71,6 +72,7 @@ class InstallTests(unittest.TestCase):
             [str(REPO / name)], env=self.env, capture_output=True, text=True, timeout=timeout
         )
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
+        self.stderr = result.stderr
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "needs systemd-analyze")
@@ -82,12 +84,61 @@ class InstallTests(unittest.TestCase):
             "ExecStart=%h/.local/bin/cargo-sweep-timer", "ExecStart=/usr/bin/true"
         ))
         result = subprocess.run(
-            ["systemd-analyze", "--user", "verify", str(service)],
+            ["systemd-analyze", "--user", "verify", str(service), str(self.timer())],
             env={**self.env, "SYSTEMD_LOG_LEVEL": "debug"},
             capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"Environment: PATH={path}\n", result.stdout + result.stderr)
+
+    def timer(self):
+        return self.config_home / "systemd/user/cargo-sweep-timer.timer"
+
+    def config(self):
+        return self.config_home / "cargo-sweep-timer/config.env"
+
+    def test_timer_runs_at_ten_by_default(self):
+        self.run_script("install.sh")
+        self.assertIn("OnCalendar=*-*-* 10:00:00\n", self.timer().read_text())
+        self.assertIn("SWEEP_TIME=10:00\n", self.config().read_text())
+
+    def test_timer_uses_the_time_from_the_config_or_the_environment(self):
+        self.config().parent.mkdir(parents=True)
+        for config, environment, expected in (
+            ("SWEEP_TIME=21:30\n", None, "21:30"),
+            ("SWEEP_TIME=21:30\n", "7:05", "07:05"),
+            ("SWEEP_DAYS=3\n", None, "10:00"),
+            ("SWEEP_TIME=21:30\n", "", "10:00"),
+        ):
+            with self.subTest(config=config, environment=environment):
+                self.config().write_text(config)
+                self.env.pop("SWEEP_TIME", None)
+                if environment is not None:
+                    self.env["SWEEP_TIME"] = environment
+                self.run_script("install.sh")
+                self.assertIn(f"OnCalendar=*-*-* {expected}:00\n", self.timer().read_text())
+                self.assertEqual(self.stderr, "")
+
+    def test_install_stops_when_the_config_fails_to_load(self):
+        self.config().parent.mkdir(parents=True)
+        self.config().write_text("false\nSWEEP_TIME=14:00\n")
+        for environment in (None, "07:00"):
+            with self.subTest(environment=environment):
+                self.log.unlink(missing_ok=True)
+                if environment is not None:
+                    self.env["SWEEP_TIME"] = environment
+                calls = self.run_script("install.sh", expected_status=1)
+                self.assertIn(f"could not load config: {self.config()}", self.stderr)
+                self.assertFalse(any(call[0] in ("install", "systemctl") for call in calls))
+                self.assertFalse(self.timer().exists())
+
+    def test_invalid_time_falls_back_to_ten(self):
+        for value in ("24:00", "10:60", "10", "noon", "10:00:00"):
+            with self.subTest(value=value):
+                self.env["SWEEP_TIME"] = value
+                self.run_script("install.sh")
+                self.assertIn("OnCalendar=*-*-* 10:00:00\n", self.timer().read_text())
+                self.assertIn(f"SWEEP_TIME must be HH:MM in 24-hour time, got: {value}", self.stderr)
 
     def test_uninstall_stops_service_before_removing_files(self):
         calls = self.run_script("uninstall.sh")
@@ -126,6 +177,18 @@ class InstallTests(unittest.TestCase):
         })
         self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(self.agent_plist())], calls)
         self.assertFalse(any(call[0] == "systemctl" for call in calls))
+
+    def test_macos_agent_runs_at_the_configured_time(self):
+        self.env.update(UNAME="Darwin")
+        for environment, hour, minute in ((None, 10, 0), ("07:05", 7, 5), ("bad", 10, 0)):
+            with self.subTest(environment=environment):
+                self.env.pop("SWEEP_TIME", None)
+                if environment is not None:
+                    self.env["SWEEP_TIME"] = environment
+                self.run_script("install.sh")
+                with self.agent_plist().open("rb") as plist:
+                    agent = plistlib.load(plist)
+                self.assertEqual(agent["StartCalendarInterval"], {"Hour": hour, "Minute": minute})
 
     def test_macos_install_creates_the_agent_log_dir(self):
         self.env.update(UNAME="Darwin", BOOTOUT_STATUS="3", PRINT_STATUS="113")

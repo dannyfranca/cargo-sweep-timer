@@ -13,7 +13,7 @@ Config file: \${CARGO_SWEEP_TIMER_CONFIG:-\${XDG_CONFIG_HOME:-~/.config}/cargo-s
 Variables already set in the environment override the config file.
 
   SWEEP_DAYS         Age threshold in days (default: 1)
-  SWEEP_ROOTS        Colon-separated dirs searched for Cargo projects at any depth (default: ~/git)
+  SWEEP_ROOTS        Colon-separated dirs searched for Cargo target dirs at any depth (default: ~/git)
   SWEEP_TARGET_DIRS  Colon-separated target dirs outside any project, as set by CARGO_TARGET_DIR (default: none)
   DRY_RUN            1 to only report what would be removed (default: 0)
 USAGE
@@ -27,9 +27,18 @@ for arg in "$@"; do
   esac
 done
 
+# launchd has no log rotation for user agents. It opens the log with O_APPEND, so
+# truncation here is safe: later writes start at the new end of the file.
+log=${CARGO_SWEEP_TIMER_LOG:-}
+if [[ -n $log && -n $(find "$log" -size +1048576c 2>/dev/null) ]]; then
+  : >"$log"
+fi
+
 settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
 # macOS ships bash 3.2, which lacks associative arrays and [[ -v ]].
 for name in "${settings[@]}"; do
+  # A caller that exports override_<SETTING> must not inject a setting.
+  unset "override_$name"
   [[ -n ${!name+set} ]] && printf -v "override_$name" '%s' "${!name}"
 done
 
@@ -82,6 +91,18 @@ sweep() {
   fi
 }
 
+# cargo-sweep resolves the target dir through `cargo metadata`, which needs a project.
+# An empty anchor project lets CARGO_TARGET_DIR alone pick which dir gets swept.
+anchor=$(mktemp -d)
+trap 'rm -rf "$anchor"' EXIT
+mkdir "$anchor/src"
+touch "$anchor/src/lib.rs"
+printf '[package]\nname = "anchor"\nversion = "0.0.0"\nedition = "2021"\n' >"$anchor/Cargo.toml"
+
+sweep_target_dir() {
+  CARGO_TARGET_DIR=$1 sweep "${sweep_args[@]}" "$anchor"
+}
+
 IFS=: read -ra roots <<<"$SWEEP_ROOTS"
 # bash 3.2 treats an empty array as unset under set -u.
 for root in ${roots[@]+"${roots[@]}"}; do
@@ -96,30 +117,32 @@ for root in ${roots[@]+"${roots[@]}"}; do
     failures=$((failures + 1))
     continue
   fi
-  # Worktrees often live in hidden dirs such as .worktrees, which --recursive skips by default.
-  sweep "${sweep_args[@]}" --recursive --hidden "$root"
+  # `cargo sweep --recursive` silently skips projects whose manifest needs their own
+  # .cargo/config.toml, such as private registries, because cargo reads config from the
+  # working dir. Finding the target dirs avoids loading any project. Hidden dirs such as
+  # .worktrees are searched too. Cargo tags every target dir it creates, which rules out
+  # unrelated dirs named target, but a project can live below such a dir. A target dir
+  # can also be a symlink to a shared dir.
+  if ! found=$(find "$root" -name target \( -type d -o -type l \) \
+    -exec test -f {}/CACHEDIR.TAG \; -prune -print); then
+    echo "could not search all of root: $root" >&2
+    failures=$((failures + 1))
+  fi
+  while IFS= read -r target_dir; do
+    [[ -n $target_dir ]] && sweep_target_dir "$target_dir"
+  done <<<"$found"
 done
 
 IFS=: read -ra target_dirs <<<"$SWEEP_TARGET_DIRS"
-if ((${#target_dirs[@]})); then
-  # cargo-sweep resolves the target dir through `cargo metadata`, which needs a project.
-  # An empty anchor project lets CARGO_TARGET_DIR alone pick which dir gets swept.
-  anchor=$(mktemp -d)
-  trap 'rm -rf "$anchor"' EXIT
-  mkdir "$anchor/src"
-  touch "$anchor/src/lib.rs"
-  printf '[package]\nname = "anchor"\nversion = "0.0.0"\nedition = "2021"\n' >"$anchor/Cargo.toml"
-
-  for target_dir in "${target_dirs[@]}"; do
-    [[ -z $target_dir ]] && continue
-    if [[ ! -d $target_dir ]]; then
-      echo "skipping missing target dir: $target_dir" >&2
-      failures=$((failures + 1))
-      continue
-    fi
-    CARGO_TARGET_DIR=$target_dir sweep "${sweep_args[@]}" "$anchor"
-  done
-fi
+for target_dir in ${target_dirs[@]+"${target_dirs[@]}"}; do
+  [[ -z $target_dir ]] && continue
+  if [[ ! -d $target_dir ]]; then
+    echo "skipping missing target dir: $target_dir" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+  sweep_target_dir "$target_dir"
+done
 
 if ((failures)); then
   echo "$failures sweep(s) failed" >&2

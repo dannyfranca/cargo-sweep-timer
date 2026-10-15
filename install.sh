@@ -38,8 +38,16 @@ xml_escape() {
 }
 
 unload_launchd() {
-  local service=gui/$(id -u)/$label status=0
-  launchctl bootout "$service" 2>/dev/null && return
+  local service=gui/$(id -u)/$label status=0 attempt
+  if launchctl bootout "$service" 2>/dev/null; then
+    # bootout can return while a sweep still runs, and bootstrap fails until the job exits.
+    for ((attempt = 0; attempt < 50; attempt++)); do
+      launchctl print "$service" >/dev/null 2>&1 || return 0
+      sleep 0.2
+    done
+    echo "$service did not stop within 10 s" >&2
+    exit 1
+  fi
   launchctl print "$service" >/dev/null 2>&1 || status=$?
   # launchctl print exits 113 only when the service is not loaded; any other result leaves its state unknown.
   if ((status != 113)); then
@@ -53,8 +61,8 @@ install_launchd() {
   plist=$(<"$repo/launchd/$label.plist")
   plist=${plist//@HOME@/"$(xml_escape "$HOME")"}
   plist=${plist//@PATH@/"$(xml_escape "$service_path")"}
-  # launchd does not set XDG_CONFIG_HOME, so pin the config this installer wrote.
-  plist=${plist//@CONFIG@/"$(xml_escape "$config_dir/config.env")"}
+  # launchd does not set XDG_CONFIG_HOME, so pin the one this installer used.
+  plist=${plist//@CONFIG_HOME@/"$(xml_escape "${XDG_CONFIG_HOME:-$HOME/.config}")"}
   mkdir -p "$agent_dir" "$HOME/Library/Logs"
   printf '%s\n' "$plist" >"$agent_dir/$label.plist"
   launchctl bootstrap "gui/$(id -u)" "$agent_dir/$label.plist"

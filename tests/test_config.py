@@ -59,3 +59,28 @@ class ConfigTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.cargo_calls.read_text(), "sweep --version\n")
+
+    def test_exported_override_variables_are_ignored(self):
+        del self.env["SWEEP_DAYS"]
+        self.env["override_SWEEP_DAYS"] = "invalid"
+        self.env["CARGO_SWEEP_TIMER_CONFIG"] = str(self.config)
+        self.config.write_text("SWEEP_DAYS=1\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_log_larger_than_one_mib_is_truncated_at_start(self):
+        log = self.root / "sweep.log"
+        self.env["CARGO_SWEEP_TIMER_LOG"] = str(log)
+        for size, expected in ((1024 * 1024, 1024 * 1024), (1024 * 1024 + 1, 0)):
+            with self.subTest(size=size):
+                log.write_bytes(b"x" * size)
+                result = self.run_script()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(log.stat().st_size, expected)
+
+    def test_missing_log_is_not_created(self):
+        log = self.root / "sweep.log"
+        self.env["CARGO_SWEEP_TIMER_LOG"] = str(log)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(log.exists())

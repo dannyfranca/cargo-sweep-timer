@@ -19,7 +19,7 @@ The script, the config, and the commands in [Configure](#configure) and [Use on 
 If you set `XDG_CONFIG_HOME`, `~/.config` in this README means that dir. Set the same value when you run `install.sh` and `uninstall.sh`, because each script finds its files from the value at run time.
 
 - On Linux, the systemd user manager must have the same value. The manager finds the timer units from its own `XDG_CONFIG_HOME`, and the service does not set it for the sweep. If the values are different, the installer cannot enable the timer, or the scheduled sweep cannot find your config.
-- On macOS, the agent always reads the config file that the installer created.
+- On macOS, the installer writes its `XDG_CONFIG_HOME` value into the agent, so the agent finds your config.
 
 ## Requirements
 
@@ -53,7 +53,7 @@ Edit `~/.config/cargo-sweep-timer/config.env`:
 # Remove artifacts not used for this many days.
 SWEEP_DAYS=1
 
-# Colon-separated dirs searched for Cargo projects at any depth, hidden dirs included.
+# Colon-separated dirs searched for Cargo target dirs at any depth, hidden dirs included.
 SWEEP_ROOTS="$HOME/git"
 
 # Colon-separated target dirs that live outside any project (CARGO_TARGET_DIR builds).
@@ -63,7 +63,7 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SWEEP_DAYS` | `1` | Remove artifacts not used for this many days. |
-| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo projects. The search includes hidden dirs such as `.worktrees`. |
+| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs. The search includes hidden dirs such as `.worktrees`. |
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
 
@@ -71,7 +71,9 @@ Bash reads the file, so `$HOME` expands. A variable that is already set in the e
 
 A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
 
-The command fails if a configured root is missing or cannot be read or searched. Cargo-sweep 0.8.0 can still skip nested dirs that it cannot read, or projects whose Cargo metadata fails to load. It does not report these search errors, so a successful run does not confirm that it found every project.
+The command fails if a configured root is missing, or if a dir in it cannot be read or searched.
+
+In a root, the command sweeps each dir named `target` that contains the `CACHEDIR.TAG` file that Cargo writes. It does not load the projects, so a project that needs its own `.cargo/config.toml`, for example for a private registry, is swept too. A project that sets a different target dir name in its Cargo config is not found. Add that dir to `SWEEP_TARGET_DIRS`.
 
 ## Use on all systems
 
@@ -132,7 +134,7 @@ The uninstaller disables the timer and stops the sweep service. Then it removes 
 
 ### Install on macOS
 
-The installer writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist`, then loads it. launchd does not set `XDG_CONFIG_HOME`, so the agent always reads the config file that the installer created.
+The installer writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist`, then loads it. launchd does not set `XDG_CONFIG_HOME`, so the installer writes its value into the agent.
 
 ### Schedule on macOS
 
@@ -142,7 +144,13 @@ To change the schedule, edit `StartCalendarInterval` in `launchd/com.dannyfranca
 
 ### Folder access on macOS
 
-If a sweep root is in `~/Documents`, `~/Desktop`, or `~/Downloads`, macOS blocks access from the agent. Give `/bin/bash` Full Disk Access in System Settings, or use a root outside these dirs.
+macOS blocks access from the agent to the folders that it protects. These folders include:
+
+- `~/Documents`, `~/Desktop`, and `~/Downloads`
+- iCloud Drive (`~/Library/Mobile Documents`)
+- Removable volumes and network volumes
+
+If a sweep root is in a protected folder, give `/bin/bash` Full Disk Access in System Settings. Or, use a root outside these folders.
 
 ### Use on macOS
 
@@ -151,6 +159,8 @@ launchctl kickstart gui/$(id -u)/com.dannyfranca.cargo-sweep-timer   # sweep now
 launchctl print gui/$(id -u)/com.dannyfranca.cargo-sweep-timer       # agent state and last exit code
 tail -f ~/Library/Logs/cargo-sweep-timer.log                          # logs of the sweeps
 ```
+
+If the log is larger than 1 MiB when a sweep starts, the sweep clears the log first.
 
 ### Uninstall on macOS
 

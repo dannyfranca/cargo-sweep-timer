@@ -10,7 +10,7 @@ The same `install.sh` and `uninstall.sh` operate on both systems. They find the 
 | --- | --- | --- |
 | Scheduler | systemd user timer | launchd user agent |
 | Schedule files | `~/.config/systemd/user/cargo-sweep-timer.{service,timer}` | `~/Library/LaunchAgents/com.dannyfranca.cargo-sweep-timer.plist` |
-| Default schedule | Daily at 00:00, with a random delay of up to 15 minutes | Daily at 00:00 |
+| Schedule | Daily at `SWEEP_TIME` (default 10:00), with a random delay of up to 15 minutes | Daily at `SWEEP_TIME` (default 10:00) |
 | Missed sweep (computer off) | Runs when the systemd user manager starts, usually at login | Skipped until the next day |
 | Logs | `journalctl --user -u cargo-sweep-timer.service` | `~/Library/Logs/cargo-sweep-timer.log` |
 
@@ -50,6 +50,9 @@ To update, pull the repo and run `./install.sh` again.
 Edit `~/.config/cargo-sweep-timer/config.env`:
 
 ```sh
+# Daily sweep time, HH:MM in 24-hour local time. Run ./install.sh again after a change.
+SWEEP_TIME=10:00
+
 # Remove artifacts not used for this many days.
 SWEEP_DAYS=1
 
@@ -62,12 +65,15 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `SWEEP_TIME` | `10:00` | Daily sweep time, `HH:MM` in 24-hour local time. The installer reads it. |
 | `SWEEP_DAYS` | `1` | Remove artifacts not used for this many days. |
 | `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs. The search includes hidden dirs such as `.worktrees`. |
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
 
 Bash reads the file, so `$HOME` expands. A variable that is already set in the environment overrides the file. To use a different file, set `CARGO_SWEEP_TIMER_CONFIG`. The command stops if this file is missing or the config fails to load.
+
+The installer reads `SWEEP_TIME` from `~/.config/cargo-sweep-timer/config.env` and writes it into the systemd timer or the launchd agent. After you change it, run `./install.sh` again. A value that is set in the environment of `install.sh` overrides the file. If the value is not a valid time, the installer shows a warning and uses 10:00. If the config fails to load, the installer stops before it changes files.
 
 A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
 
@@ -102,21 +108,11 @@ The installer copies the service and timer units to `~/.config/systemd/user/`, t
 
 ### Schedule on Linux
 
-The timer runs once each day. If the computer is off at that time, the missed sweep runs when your systemd user manager next starts, usually at login. The timer can delay the sweep by up to 15 minutes. To run without a login, enable lingering with `loginctl enable-linger "$USER"`.
+The timer runs each day at `SWEEP_TIME`. If the computer is off at that time, the missed sweep runs when your systemd user manager next starts, usually at login. The timer can delay the sweep by up to 15 minutes. To run without a login, enable lingering with `loginctl enable-linger "$USER"`.
 
-To change the schedule, use a systemd drop-in:
+To change the time, set `SWEEP_TIME`, then run `./install.sh` again. Refer to [Configure](#configure).
 
-```sh
-systemctl --user edit cargo-sweep-timer.timer
-```
-
-```ini
-[Timer]
-OnCalendar=
-OnCalendar=*-*-* 11:30:00
-```
-
-The empty `OnCalendar=` line removes the default schedule. Without it, systemd keeps both schedules.
+If you changed the time with a systemd drop-in before, the drop-in overrides `SWEEP_TIME`. To remove it, run `systemctl --user revert cargo-sweep-timer.timer`.
 
 ### Use on Linux
 
@@ -138,9 +134,9 @@ The installer writes the agent to `~/Library/LaunchAgents/com.dannyfranca.cargo-
 
 ### Schedule on macOS
 
-The agent runs each day at 00:00. If the Mac sleeps at that time, the sweep runs when it wakes. If the Mac is off at that time, launchd skips the sweep until the next day. The agent runs only while you are logged in.
+The agent runs each day at `SWEEP_TIME`. If the Mac sleeps at that time, the sweep runs when it wakes. If the Mac is off at that time, launchd skips the sweep until the next day. The agent runs only while you are logged in.
 
-To change the schedule, edit `StartCalendarInterval` in `launchd/com.dannyfranca.cargo-sweep-timer.plist`, then run `./install.sh` again.
+To change the time, set `SWEEP_TIME`, then run `./install.sh` again. Refer to [Configure](#configure).
 
 ### Folder access on macOS
 

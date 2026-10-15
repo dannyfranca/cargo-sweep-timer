@@ -27,6 +27,13 @@ for arg in "$@"; do
   esac
 done
 
+# launchd has no log rotation for user agents. It opens the log with O_APPEND, so
+# truncation here is safe: later writes start at the new end of the file.
+log=${CARGO_SWEEP_TIMER_LOG:-}
+if [[ -n $log && -n $(find "$log" -size +1048576c 2>/dev/null) ]]; then
+  : >"$log"
+fi
+
 settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
 # macOS ships bash 3.2, which lacks associative arrays and [[ -v ]].
 for name in "${settings[@]}"; do

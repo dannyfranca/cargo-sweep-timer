@@ -122,6 +122,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(agent["EnvironmentVariables"], {
             "PATH": f"{self.env['CARGO_HOME']}/bin:{self.env['PATH']}",
             "XDG_CONFIG_HOME": str(self.config_home),
+            "CARGO_SWEEP_TIMER_LOG": f"{self.home}/Library/Logs/cargo-sweep-timer.log",
         })
         self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(self.agent_plist())], calls)
         self.assertFalse(any(call[0] == "systemctl" for call in calls))

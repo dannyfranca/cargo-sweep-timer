@@ -154,6 +154,8 @@ launchctl print gui/$(id -u)/com.dannyfranca.cargo-sweep-timer       # agent sta
 tail -f ~/Library/Logs/cargo-sweep-timer.log                          # logs of the sweeps
 ```
 
+If the log is larger than 1 MiB when a sweep starts, the sweep clears the log first.
+
 ### Uninstall on macOS
 
 The uninstaller unloads the agent. Then it removes the agent and the script. If launchd cannot confirm that the agent is unloaded, the uninstaller keeps the files and exits with an error.

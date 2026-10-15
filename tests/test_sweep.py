@@ -113,14 +113,57 @@ class SweepTests(unittest.TestCase):
         self.assertFalse(artifact.exists())
 
     def test_only_target_dirs_tagged_by_cargo_are_swept(self):
-        self.stub_cargo("", 0)
-        (self.root / "cargo").write_text(
-            '#!/usr/bin/env bash\n[[ $* == "sweep --version" ]] && exit 0\necho "swept $CARGO_TARGET_DIR"\n'
-        )
+        self.stub_swept_dirs()
         (self.root / "untagged" / "target").mkdir(parents=True)
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
+    def test_tagged_target_dirs_below_an_untagged_target_dir_are_swept(self):
+        self.stub_swept_dirs()
+        nested = self.root / "untagged" / "target" / "project" / "target"
+        nested.mkdir(parents=True)
+        (nested / "CACHEDIR.TAG").touch()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            sorted([f"swept {self.root / 'project' / 'target'}", f"swept {nested}"]),
+        )
+
+    def test_symlinked_target_dirs_are_swept(self):
+        self.stub_swept_dirs()
+        destination = self.root / "elsewhere"
+        destination.mkdir()
+        (destination / "CACHEDIR.TAG").touch()
+        link = self.root / "linked" / "target"
+        link.parent.mkdir()
+        link.symlink_to(destination)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            sorted([f"swept {self.root / 'project' / 'target'}", f"swept {link}"]),
+        )
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
+    def test_unreadable_dir_in_a_root_reports_failure(self):
+        self.stub_swept_dirs()
+        locked = self.root / "locked"
+        locked.mkdir(mode=0)
+        try:
+            result = self.run_script()
+        finally:
+            locked.chmod(0o700)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("could not search all of root:", result.stderr)
+        self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
+    def stub_swept_dirs(self):
+        self.stub_cargo("", 0)
+        (self.root / "cargo").write_text(
+            '#!/usr/bin/env bash\n[[ $* == "sweep --version" ]] && exit 0\necho "swept $CARGO_TARGET_DIR"\n'
+        )
 
     def stub_cargo(self, output, status, wait_for_input=False):
         cargo = self.root / "cargo"

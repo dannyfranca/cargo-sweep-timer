@@ -120,14 +120,16 @@ for root in ${roots[@]+"${roots[@]}"}; do
   # `cargo sweep --recursive` silently skips projects whose manifest needs their own
   # .cargo/config.toml, such as private registries, because cargo reads config from the
   # working dir. Finding the target dirs avoids loading any project. Hidden dirs such as
-  # .worktrees are searched too.
-  if ! found=$(find "$root" -type d -name target -prune -print); then
+  # .worktrees are searched too. Cargo tags every target dir it creates, which rules out
+  # unrelated dirs named target, but a project can live below such a dir. A target dir
+  # can also be a symlink to a shared dir.
+  if ! found=$(find "$root" -name target \( -type d -o -type l \) \
+    -exec test -f {}/CACHEDIR.TAG \; -prune -print); then
     echo "could not search all of root: $root" >&2
     failures=$((failures + 1))
   fi
   while IFS= read -r target_dir; do
-    # Cargo tags every target dir it creates, which rules out unrelated dirs named target.
-    [[ -f $target_dir/CACHEDIR.TAG ]] && sweep_target_dir "$target_dir"
+    [[ -n $target_dir ]] && sweep_target_dir "$target_dir"
   done <<<"$found"
 done
 

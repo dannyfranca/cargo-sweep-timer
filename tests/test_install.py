@@ -40,13 +40,20 @@ class InstallTests(unittest.TestCase):
             '    sys.exit(int(os.environ.get("SHOW_STATUS", "0")))\n'
             'if command == "uname":\n'
             '    print(os.environ.get("UNAME", "Linux"))\n'
-            'if command == "launchctl" and args[0] in ("bootout", "print"):\n'
-            '    sys.exit(int(os.environ.get(args[0].upper() + "_STATUS", "0")))\n'
+            'if command == "launchctl" and args[0] == "bootout":\n'
+            '    sys.exit(int(os.environ.get("BOOTOUT_STATUS", "0")))\n'
+            'if command == "launchctl" and args[0] == "print":\n'
+            '    prints = sum(json.loads(line)[:2] == ["launchctl", "print"] for line in open(os.environ["COMMAND_LOG"]))\n'
+            '    loaded = prints <= int(os.environ.get("PRINT_LOADED_CALLS", "0"))\n'
+            '    sys.exit(0 if loaded else int(os.environ.get("PRINT_STATUS", "113")))\n'
             'if command == "install" and args[-1] != str(Path.home() / ".local/bin/cargo-sweep-timer"):\n'
             '    os.execv(os.environ["REAL_INSTALL"], ["install", *args])\n'
         )
         for command in ("cargo", "systemctl", "launchctl", "uname", "install", "rm"):
             (self.commands / command).symlink_to(stub)
+        sleep = self.commands / "sleep"
+        sleep.write_text("#!/bin/sh\n")
+        sleep.chmod(0o755)
         self.config_home = self.root / "config"
         self.home = self.root / "home"
         self.env = os.environ.copy()
@@ -59,9 +66,9 @@ class InstallTests(unittest.TestCase):
             REAL_INSTALL=shutil.which("install"),
         )
 
-    def run_script(self, name, expected_status=0):
+    def run_script(self, name, expected_status=0, timeout=10):
         result = subprocess.run(
-            [str(REPO / name)], env=self.env, capture_output=True, text=True, timeout=10
+            [str(REPO / name)], env=self.env, capture_output=True, text=True, timeout=timeout
         )
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -125,11 +132,26 @@ class InstallTests(unittest.TestCase):
         self.assertTrue((self.home / "Library/Logs").is_dir())
 
     def test_macos_install_keeps_files_when_old_agent_stays_loaded(self):
-        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1")
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1", PRINT_STATUS="0")
         calls = self.run_script("install.sh", expected_status=1)
         self.assertFalse(any(call[0] == "install" for call in calls))
         self.assertFalse(any(call[:2] == ["launchctl", "bootstrap"] for call in calls))
         self.assertFalse(self.agent_plist().exists())
+
+    def test_macos_install_waits_for_the_old_agent_to_exit(self):
+        self.env.update(UNAME="Darwin", PRINT_LOADED_CALLS="3")
+        calls = self.run_script("install.sh")
+        prints = [index for index, call in enumerate(calls) if call[:2] == ["launchctl", "print"]]
+        bootstrap = next(index for index, call in enumerate(calls) if call[:2] == ["launchctl", "bootstrap"])
+        self.assertEqual(len(prints), 4)
+        self.assertLess(prints[-1], bootstrap)
+
+    def test_macos_install_stops_when_the_old_agent_does_not_exit(self):
+        self.env.update(UNAME="Darwin", PRINT_STATUS="0")
+        # The wait polls launchctl 50 times, and each stub call starts Python.
+        calls = self.run_script("install.sh", expected_status=1, timeout=60)
+        self.assertFalse(any(call[0] == "install" for call in calls))
+        self.assertFalse(any(call[:2] == ["launchctl", "bootstrap"] for call in calls))
 
     def test_macos_uninstall_unloads_agent_before_removing_files(self):
         self.env.update(UNAME="Darwin")
@@ -139,7 +161,7 @@ class InstallTests(unittest.TestCase):
         self.assertLess(unload, remove)
 
     def test_macos_uninstall_keeps_files_when_agent_stays_loaded(self):
-        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1")
+        self.env.update(UNAME="Darwin", BOOTOUT_STATUS="1", PRINT_STATUS="0")
         calls = self.run_script("uninstall.sh", expected_status=1)
         self.assertFalse(any(call[0] == "rm" for call in calls))
 

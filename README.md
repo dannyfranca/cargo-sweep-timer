@@ -144,7 +144,13 @@ To change the schedule, edit `StartCalendarInterval` in `launchd/com.dannyfranca
 
 ### Folder access on macOS
 
-If a sweep root is in `~/Documents`, `~/Desktop`, or `~/Downloads`, macOS blocks access from the agent. Give `/bin/bash` Full Disk Access in System Settings, or use a root outside these dirs.
+macOS blocks access from the agent to the folders that it protects. These folders include:
+
+- `~/Documents`, `~/Desktop`, and `~/Downloads`
+- iCloud Drive (`~/Library/Mobile Documents`)
+- Removable volumes and network volumes
+
+If a sweep root is in a protected folder, give `/bin/bash` Full Disk Access in System Settings. Or, use a root outside these folders.
 
 ### Use on macOS
 

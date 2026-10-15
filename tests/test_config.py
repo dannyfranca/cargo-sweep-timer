@@ -59,3 +59,11 @@ class ConfigTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.cargo_calls.read_text(), "sweep --version\n")
+
+    def test_exported_override_variables_are_ignored(self):
+        del self.env["SWEEP_DAYS"]
+        self.env["override_SWEEP_DAYS"] = "invalid"
+        self.env["CARGO_SWEEP_TIMER_CONFIG"] = str(self.config)
+        self.config.write_text("SWEEP_DAYS=1\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)

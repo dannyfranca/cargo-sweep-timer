@@ -30,6 +30,8 @@ done
 settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
 # macOS ships bash 3.2, which lacks associative arrays and [[ -v ]].
 for name in "${settings[@]}"; do
+  # A caller that exports override_<SETTING> must not inject a setting.
+  unset "override_$name"
   [[ -n ${!name+set} ]] && printf -v "override_$name" '%s' "${!name}"
 done
 

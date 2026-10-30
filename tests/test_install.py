@@ -107,7 +107,7 @@ class InstallTests(unittest.TestCase):
         for config, environment, expected in (
             ("SWEEP_TIME=21:30\n", None, "21:30"),
             ("SWEEP_TIME=21:30\n", "7:05", "07:05"),
-            ("SWEEP_DAYS=3\n", None, "10:00"),
+            ("SWEEP_MAX_AGE=3\n", None, "10:00"),
             ("SWEEP_TIME=21:30\n", "", "10:00"),
         ):
             with self.subTest(config=config, environment=environment):

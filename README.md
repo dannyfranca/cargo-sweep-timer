@@ -2,7 +2,7 @@
 
 Cargo does not delete old build artifacts. Each `target` dir grows until the disk is full. Worktrees make this worse, because each worktree has its own `target` dir.
 
-This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer on Linux, or a launchd agent on macOS. It removes artifacts that were not used for a set number of days.
+This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer on Linux, or a launchd agent on macOS. It removes artifacts that were not used for a set number of seconds.
 
 The same `install.sh` and `uninstall.sh` operate on both systems. They find the system with `uname` and select the scheduler:
 
@@ -53,8 +53,9 @@ Edit `~/.config/cargo-sweep-timer/config.env`:
 # Daily sweep time, HH:MM in 24-hour local time. Run ./install.sh again after a change.
 SWEEP_TIME=10:00
 
-# Remove artifacts not used for this many days.
-SWEEP_DAYS=1
+# Remove artifacts not used for this many seconds: 3600 = 1 hour, 21600 = 6 hours, 86400 = 1 day,
+# 604800 = 7 days. SWEEP_MAX_AGE replaces SWEEP_DAYS.
+SWEEP_MAX_AGE=86400
 
 # Colon-separated dirs searched for Cargo target dirs at any depth, hidden dirs included.
 SWEEP_ROOTS="$HOME/git"
@@ -66,7 +67,7 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SWEEP_TIME` | `10:00` | Daily sweep time, `HH:MM` in 24-hour local time. The installer reads it. |
-| `SWEEP_DAYS` | `1` | Remove artifacts not used for this many days. |
+| `SWEEP_MAX_AGE` | `86400` | Remove artifacts not used for this many seconds. Use whole seconds only: `3600` (1 hour), `21600` (6 hours), `86400` (1 day), `604800` (7 days). |
 | `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs. The search includes hidden dirs such as `.worktrees`. |
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
@@ -75,7 +76,11 @@ Bash reads the file, so `$HOME` expands. A variable that is already set in the e
 
 The installer reads `SWEEP_TIME` from `~/.config/cargo-sweep-timer/config.env` and writes it into the systemd timer or the launchd agent. After you change it, run `./install.sh` again. A value that is set in the environment of `install.sh` overrides the file. If the value is not a valid time, the installer shows a warning and uses 10:00. If the config fails to load, the installer stops before it changes files.
 
-A low `SWEEP_DAYS` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
+A low `SWEEP_MAX_AGE` value frees more disk space. The cost is that the next build of an old branch compiles its dependencies again.
+
+`SWEEP_MAX_AGE` replaces `SWEEP_DAYS`. If `SWEEP_DAYS` is set in the config or the environment, the command stops before it sweeps. Multiply the old value by `86400`, for example `SWEEP_DAYS=7` becomes `SWEEP_MAX_AGE=604800`.
+
+cargo-sweep uses the last access time of each artifact. Most Linux systems mount disks with `relatime`, which updates the access time at most once a day. With `noatime`, the access time does not change when a file is read. For this reason, a value below `86400` can remove artifacts that builds still use, and the next build compiles them again.
 
 The command fails if a configured root is missing, or if a dir in it cannot be read or searched.
 
@@ -84,9 +89,9 @@ In a root, the command sweeps each dir named `target` that contains the `CACHEDI
 ## Use on all systems
 
 ```sh
-cargo-sweep-timer --dry-run      # show what a sweep would remove
-cargo-sweep-timer                # sweep now
-SWEEP_DAYS=7 cargo-sweep-timer   # override one setting for one run
+cargo-sweep-timer --dry-run              # show what a sweep would remove
+cargo-sweep-timer                        # sweep now
+SWEEP_MAX_AGE=604800 cargo-sweep-timer   # override one setting for one run
 ```
 
 If `~/.local/bin` is not in your `PATH`, use `~/.local/bin/cargo-sweep-timer`. macOS does not add this dir to `PATH` by default.

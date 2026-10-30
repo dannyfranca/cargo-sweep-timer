@@ -30,7 +30,7 @@ class ConfigTests(unittest.TestCase):
             XDG_CONFIG_HOME=str(self.root / "config"),
             SWEEP_ROOTS="",
             SWEEP_TARGET_DIRS="",
-            SWEEP_DAYS="1",
+            SWEEP_MAX_AGE="86400",
             DRY_RUN="1",
         )
 
@@ -41,11 +41,33 @@ class ConfigTests(unittest.TestCase):
 
     def test_config_errors_stop_before_cargo_runs(self):
         self.env["CARGO_SWEEP_TIMER_CONFIG"] = str(self.config)
-        for content in ("SWEEP_DAYS=(\n", "false\nSWEEP_DAYS=7\n"):
+        for content in ("SWEEP_MAX_AGE=(\n", "false\nSWEEP_MAX_AGE=7\n"):
             with self.subTest(content=content):
                 self.config.write_text(content)
                 result = self.run_script()
                 self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.cargo_calls.exists())
+
+    def test_max_age_other_than_whole_seconds_stops_before_cargo_runs(self):
+        for value in ("-1", "1.5", "6h", "1e3", "0,5", " 60", "1000000000000"):
+            with self.subTest(value=value):
+                self.env["SWEEP_MAX_AGE"] = value
+                result = self.run_script()
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("SWEEP_MAX_AGE must be", result.stderr)
+                self.assertFalse(self.cargo_calls.exists())
+
+    def test_removed_sweep_days_stops_before_cargo_runs(self):
+        self.env["CARGO_SWEEP_TIMER_CONFIG"] = str(self.config)
+        for config, environment in (("SWEEP_DAYS=1\n", None), ("", "1")):
+            with self.subTest(config=config, environment=environment):
+                self.config.write_text(config)
+                self.env.pop("SWEEP_DAYS", None)
+                if environment is not None:
+                    self.env["SWEEP_DAYS"] = environment
+                result = self.run_script()
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("SWEEP_MAX_AGE replaces SWEEP_DAYS", result.stderr)
                 self.assertFalse(self.cargo_calls.exists())
 
     def test_missing_explicit_config_stops_before_cargo_runs(self):
@@ -61,10 +83,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.cargo_calls.read_text(), "sweep --version\n")
 
     def test_exported_override_variables_are_ignored(self):
-        del self.env["SWEEP_DAYS"]
-        self.env["override_SWEEP_DAYS"] = "invalid"
+        del self.env["SWEEP_MAX_AGE"]
+        self.env["override_SWEEP_MAX_AGE"] = "invalid"
         self.env["CARGO_SWEEP_TIMER_CONFIG"] = str(self.config)
-        self.config.write_text("SWEEP_DAYS=1\n")
+        self.config.write_text("SWEEP_MAX_AGE=1\n")
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
 

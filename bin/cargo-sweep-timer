@@ -7,12 +7,14 @@ usage() {
   cat <<USAGE
 Usage: cargo-sweep-timer [--dry-run] [--help]
 
-Removes Cargo build artifacts older than SWEEP_DAYS days.
+Removes Cargo build artifacts not used for SWEEP_MAX_AGE seconds.
 
 Config file: \${CARGO_SWEEP_TIMER_CONFIG:-\${XDG_CONFIG_HOME:-~/.config}/cargo-sweep-timer/config.env}
 Variables already set in the environment override the config file.
 
-  SWEEP_DAYS         Age threshold in days (default: 1)
+  SWEEP_MAX_AGE      Age threshold in whole seconds (default: 86400). It replaces SWEEP_DAYS.
+                     3600 = 1 hour, 21600 = 6 hours, 86400 = 1 day, 604800 = 7 days.
+                     On relatime or noatime mounts, a value below 86400 can remove artifacts that builds still use.
   SWEEP_ROOTS        Colon-separated dirs searched for Cargo target dirs at any depth (default: ~/git)
   SWEEP_TARGET_DIRS  Colon-separated target dirs outside any project, as set by CARGO_TARGET_DIR (default: none)
   DRY_RUN            1 to only report what would be removed (default: 0)
@@ -34,7 +36,7 @@ if [[ -n $log && -n $(find "$log" -size +1048576c 2>/dev/null) ]]; then
   : >"$log"
 fi
 
-settings=(SWEEP_DAYS SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
+settings=(SWEEP_MAX_AGE SWEEP_ROOTS SWEEP_TARGET_DIRS DRY_RUN)
 # macOS ships bash 3.2, which lacks associative arrays and [[ -v ]].
 for name in "${settings[@]}"; do
   # A caller that exports override_<SETTING> must not inject a setting.
@@ -56,13 +58,21 @@ for name in "${settings[@]}"; do
   [[ -n ${!override+set} ]] && printf -v "$name" '%s' "${!override}"
 done
 
-SWEEP_DAYS=${SWEEP_DAYS:-1}
+# A silent fallback to the default would sweep at an age the user did not choose.
+if [[ -n ${SWEEP_DAYS+set} ]]; then
+  echo "SWEEP_MAX_AGE replaces SWEEP_DAYS. Set SWEEP_MAX_AGE in seconds, such as 86400 for 1 day." >&2
+  exit 2
+fi
+
+SWEEP_MAX_AGE=${SWEEP_MAX_AGE:-86400}
 SWEEP_ROOTS=${SWEEP_ROOTS-$HOME/git}
 SWEEP_TARGET_DIRS=${SWEEP_TARGET_DIRS:-}
 DRY_RUN=${DRY_RUN:-0}
 
-if ! [[ $SWEEP_DAYS =~ ^[0-9]+$ ]]; then
-  echo "SWEEP_DAYS must be a whole number of days, got: $SWEEP_DAYS" >&2
+# bash arithmetic wraps above 2^63, and a wrapped age can remove every artifact. 12 digits is
+# more than 30,000 years.
+if ! [[ $SWEEP_MAX_AGE =~ ^[0-9]{1,12}$ ]]; then
+  echo "SWEEP_MAX_AGE must be a whole number of seconds with at most 12 digits, such as 86400, got: $SWEEP_MAX_AGE" >&2
   exit 2
 fi
 if ! cargo sweep --version >/dev/null 2>&1; then
@@ -70,7 +80,7 @@ if ! cargo sweep --version >/dev/null 2>&1; then
   exit 1
 fi
 
-sweep_args=(--time "$SWEEP_DAYS")
+sweep_args=(--file)
 [[ $DRY_RUN == 1 ]] && sweep_args+=(--dry-run)
 
 failures=0
@@ -99,7 +109,21 @@ mkdir "$anchor/src"
 touch "$anchor/src/lib.rs"
 printf '[package]\nname = "anchor"\nversion = "0.0.0"\nedition = "2021"\n' >"$anchor/Cargo.toml"
 
+# `cargo sweep --time` accepts whole days only. A stamp file can hold any cutoff. cargo-sweep
+# deletes the stamp after each sweep, and a long run moves the cutoff, so each sweep writes it again.
+# `date +%s` drops the fraction of the current second, which moves the cutoff back and keeps
+# artifacts a little longer. For SWEEP_MAX_AGE=0 the cutoff moves forward instead, so artifacts
+# written in the current second are removed too. Base 10 keeps a leading zero from reading as octal.
 sweep_target_dir() {
+  local now cutoff
+  now=$(date +%s)
+  if ((10#$SWEEP_MAX_AGE == 0)); then
+    cutoff=$((now + 1))
+  else
+    cutoff=$((now - 10#$SWEEP_MAX_AGE))
+  fi
+  ((cutoff < 0)) && cutoff=0
+  printf '{"secs_since_epoch":%d,"nanos_since_epoch":0}' "$cutoff" >"$anchor/sweep.timestamp"
   CARGO_TARGET_DIR=$1 sweep "${sweep_args[@]}" "$anchor"
 }
 

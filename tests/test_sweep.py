@@ -5,6 +5,7 @@ import selectors
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -26,7 +27,7 @@ class SweepTests(unittest.TestCase):
             CARGO_SWEEP_TIMER_CONFIG=str(self.config),
             SWEEP_ROOTS="",
             SWEEP_TARGET_DIRS="",
-            SWEEP_DAYS="0",
+            SWEEP_MAX_AGE="0",
             DRY_RUN="0",
         )
 
@@ -67,7 +68,7 @@ class SweepTests(unittest.TestCase):
             self.build_project(shared_project, shared_target),
         ]
         untouched = self.build_project(shared_project, self.root / "unselected target")
-        self.config.write_text('SWEEP_DAYS=invalid\nSWEEP_ROOTS=""\nSWEEP_TARGET_DIRS=""\nDRY_RUN=0\n')
+        self.config.write_text('SWEEP_MAX_AGE=invalid\nSWEEP_ROOTS=""\nSWEEP_TARGET_DIRS=""\nDRY_RUN=0\n')
         self.env.update(SWEEP_ROOTS=str(projects), SWEEP_TARGET_DIRS=str(shared_target))
 
         for args, dry_run in ((["--dry-run"], "0"), ([], "1")):
@@ -83,6 +84,26 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(all(not path.exists() for path in artifacts))
         self.assertTrue(untouched.is_file())
+
+    def test_max_age_in_seconds_sweeps_artifacts_younger_than_a_day(self):
+        project = self.create_project(self.root / "project")
+        target = self.root / "target"
+        artifact = self.build_project(project, target)
+        two_hours_ago = time.time() - 2 * 3600
+        for path in target.rglob("*"):
+            stat = path.lstat()
+            os.utime(path, (two_hours_ago, stat.st_mtime), follow_symlinks=False)
+        self.env["SWEEP_TARGET_DIRS"] = str(target)
+
+        self.env["SWEEP_MAX_AGE"] = "21600"
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(artifact.is_file())
+
+        self.env["SWEEP_MAX_AGE"] = "3600"
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(artifact.exists())
 
     def test_logged_cleanup_error_fails_and_next_target_is_swept(self):
         broken = self.root / "broken target"

@@ -28,7 +28,8 @@ class SweepTests(unittest.TestCase):
         self.config = self.root / "config.env"
         self.config.touch()
         self.env = os.environ.copy()
-        for name in ("CARGO_TARGET_DIR", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"):
+        for name in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "RUSTC_WRAPPER",
+                     "RUSTC_WORKSPACE_WRAPPER"):
             self.env.pop(name, None)
         self.env.update(
             CARGO_HOME=str(self.root / "cargo-home"),
@@ -281,6 +282,7 @@ class SweepTests(unittest.TestCase):
         for directory in internal_dirs:
             directory.mkdir(parents=True, mode=0)
         (target / "debug" / ".cargo-lock").touch()
+        self.env["SWEEP_MAX_AGE"] = "86400"
         try:
             result = self.run_script()
         finally:
@@ -301,6 +303,96 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("could not search all of root:", result.stderr)
         self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
+    def make_incremental(self, profile, crate, age_seconds):
+        crate_dir = profile / "incremental" / crate
+        (crate_dir / "s-session").mkdir(parents=True)
+        (crate_dir / "s-session" / "query-cache.bin").write_bytes(b"cache")
+        (profile / ".cargo-lock").touch()
+        then = time.time() - age_seconds
+        os.utime(crate_dir, (then, then))
+        return crate_dir
+
+    def stale_and_fresh_incremental(self):
+        self.stub_swept_dirs()
+        target = self.root / "project" / "target"
+        nested = target / "issue-1"
+        tag_as_cargo_target(nested)
+        stale = [
+            self.make_incremental(target / "debug", "app-stale", 7200),
+            self.make_incremental(target / "x86_64-unknown-linux-gnu" / "debug", "app-triple", 7200),
+            self.make_incremental(nested / "debug", "app-nested", 7200),
+        ]
+        fresh = self.make_incremental(target / "debug", "app-fresh", 60)
+        not_cargo = target / "notes" / "incremental" / "old"
+        not_cargo.mkdir(parents=True)
+        then = time.time() - 7200
+        os.utime(not_cargo, (then, then))
+        self.env["SWEEP_MAX_AGE"] = "3600"
+        return target, stale, [fresh, not_cargo]
+
+    def test_stale_incremental_crate_dirs_are_removed(self):
+        target, stale, kept = self.stale_and_fresh_incremental()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(all(not path.exists() for path in stale))
+        self.assertTrue(all(path.is_dir() for path in kept))
+        self.assertIn(f'[INFO] Removed 3 incremental crate dir(s), 0.00 GiB, from "{target}"',
+                      result.stdout)
+
+    def test_dry_run_keeps_stale_incremental_crate_dirs(self):
+        target, stale, kept = self.stale_and_fresh_incremental()
+        self.env["DRY_RUN"] = "1"
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(all(path.is_dir() for path in stale + kept))
+        for path in stale:
+            self.assertIn(f"Would remove: {path}", result.stdout)
+        self.assertIn("[INFO] Would remove 3 incremental crate dir(s)", result.stdout)
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
+    def test_failed_incremental_removal_reports_failure(self):
+        self.stub_swept_dirs()
+        profile = self.root / "project" / "target" / "debug"
+        crate_dir = self.make_incremental(profile, "app-stale", 7200)
+        self.env["SWEEP_MAX_AGE"] = "3600"
+        (profile / "incremental").chmod(0o555)
+        try:
+            result = self.run_script()
+        finally:
+            (profile / "incremental").chmod(0o755)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"could not remove: {crate_dir}", result.stderr)
+        self.assertIn("1 sweep(s) failed", result.stderr)
+        self.assertTrue(crate_dir.is_dir())
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
+    def test_unreadable_incremental_crate_dir_reports_failure(self):
+        self.stub_swept_dirs()
+        profile = self.root / "project" / "target" / "debug"
+        crate_dir = self.make_incremental(profile, "app-stale", 7200)
+        session = crate_dir / "s-session"
+        self.env["SWEEP_MAX_AGE"] = "3600"
+        session.chmod(0)
+        os.utime(crate_dir, (time.time() - 7200, time.time() - 7200))
+        try:
+            result = self.run_script()
+        finally:
+            session.chmod(0o755)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"could not remove: {crate_dir}", result.stderr)
+        self.assertIn("1 sweep(s) failed", result.stderr)
+
+    def test_incremental_cache_of_a_real_build_is_removed(self):
+        project = self.create_project(self.root / "projects" / "project")
+        target = project / "target"
+        self.build_project(project, target)
+        caches = list((target / "debug" / "incremental").glob("sweep_fixture-*"))
+        self.assertTrue(caches)
+        self.env["SWEEP_ROOTS"] = str(self.root / "projects")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(all(not path.exists() for path in caches))
 
     def stub_swept_dirs(self):
         self.stub_cargo("", 0)

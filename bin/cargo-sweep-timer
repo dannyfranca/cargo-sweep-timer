@@ -15,7 +15,8 @@ Variables already set in the environment override the config file.
   SWEEP_MAX_AGE      Age threshold in whole seconds (default: 86400). It replaces SWEEP_DAYS.
                      3600 = 1 hour, 21600 = 6 hours, 86400 = 1 day, 604800 = 7 days.
                      On relatime or noatime mounts, a value below 86400 can remove artifacts that builds still use.
-  SWEEP_ROOTS        Colon-separated dirs searched for Cargo target dirs at any depth (default: ~/git)
+  SWEEP_ROOTS        Colon-separated dirs searched for Cargo target dirs at any depth (default: ~/git).
+                     A target dir can have any name. Cargo marks it with CACHEDIR.TAG or .rustc_info.json.
   SWEEP_TARGET_DIRS  Colon-separated target dirs outside any project, as set by CARGO_TARGET_DIR (default: none)
   DRY_RUN            1 to only report what would be removed (default: 0)
 USAGE
@@ -127,6 +128,37 @@ sweep_target_dir() {
   CARGO_TARGET_DIR=$1 sweep "${sweep_args[@]}" "$anchor"
 }
 
+# Other tools such as pytest also write CACHEDIR.TAG. An unreadable tag can belong to Cargo,
+# so it is a failure and not a foreign tag.
+cargo_target_dirs() {
+  local marker tag status=0
+  while IFS= read -r marker; do
+    [[ -z $marker ]] && continue
+    if [[ ${marker##*/} == CACHEDIR.TAG ]]; then
+      tag=0
+      grep -qxF '# This file is a cache directory tag created by cargo.' "$marker" 2>/dev/null || tag=$?
+      ((tag == 1)) && continue
+      if ((tag > 1)); then
+        echo "cannot read tag: $marker" >&2
+        status=1
+        continue
+      fi
+    fi
+    printf '%s\n' "${marker%/*}"
+  done
+  return "$status"
+}
+
+# One sweep of a target dir also cleans every target dir nested in it.
+outermost_dirs() {
+  LC_ALL=C sort -u | awk '$0 == "" { next } {
+    for (i = 1; i <= kept; i++) if (index($0, outer[i] "/") == 1) next
+    outer[++kept] = $0
+    print
+  }'
+}
+
+markers=
 IFS=: read -ra roots <<<"$SWEEP_ROOTS"
 # bash 3.2 treats an empty array as unset under set -u.
 for root in ${roots[@]+"${roots[@]}"}; do
@@ -144,18 +176,30 @@ for root in ${roots[@]+"${roots[@]}"}; do
   # `cargo sweep --recursive` silently skips projects whose manifest needs their own
   # .cargo/config.toml, such as private registries, because cargo reads config from the
   # working dir. Finding the target dirs avoids loading any project. Hidden dirs such as
-  # .worktrees are searched too. Cargo tags every target dir it creates, which rules out
-  # unrelated dirs named target, but a project can live below such a dir. A target dir
-  # can also be a symlink to a shared dir.
-  if ! found=$(find "$root" -name target \( -type d -o -type l \) \
-    -exec test -f {}/CACHEDIR.TAG \; -prune -print); then
+  # .worktrees are searched too. Agents and scripts give target dirs any name and nest
+  # them, such as target/issue-123, so the marker files identify a target dir, not its
+  # name. Old Cargo versions wrote .rustc_info.json but no tag. Cargo's internal and output
+  # dirs hold most of the files in a target dir, and a target dir nested in them gets swept
+  # with its outer target dir. Projects also use names such as build and doc, so those
+  # dirs are skipped only next to a profile lock or a target dir marker. Spawning a test for every dir
+  # would cost more time than skipping whole profile dirs saves. For the same reason, only
+  # a symlink named target is followed. A target dir can also be a
+  # symlink to a shared dir.
+  if ! root_markers=$(find "$root" \
+    \( -name .fingerprint -o -name incremental -o -name deps -o -name build \) -type d \
+    -exec test -e {}/../.cargo-lock \; -prune -o \
+    -name doc -type d -exec test -e {}/../CACHEDIR.TAG -o -e {}/../.rustc_info.json \; -prune -o \
+    \( -name CACHEDIR.TAG -o -name .rustc_info.json \) -type f -print -o \
+    -name target -type l -exec test -f {}/CACHEDIR.TAG \; -exec printf '%s/CACHEDIR.TAG\n' {} \;); then
     echo "could not search all of root: $root" >&2
     failures=$((failures + 1))
   fi
-  while IFS= read -r target_dir; do
-    [[ -n $target_dir ]] && sweep_target_dir "$target_dir"
-  done <<<"$found"
+  markers+=$root_markers$'\n'
 done
+
+if ! candidates=$(cargo_target_dirs <<<"$markers"); then
+  failures=$((failures + 1))
+fi
 
 IFS=: read -ra target_dirs <<<"$SWEEP_TARGET_DIRS"
 for target_dir in ${target_dirs[@]+"${target_dirs[@]}"}; do
@@ -165,8 +209,13 @@ for target_dir in ${target_dirs[@]+"${target_dirs[@]}"}; do
     failures=$((failures + 1))
     continue
   fi
-  sweep_target_dir "$target_dir"
+  candidates+=$'\n'${target_dir%/}
 done
+
+# Roots can overlap, and a configured target dir can also be in a root.
+while IFS= read -r target_dir; do
+  [[ -n $target_dir ]] && sweep_target_dir "$target_dir"
+done < <(outermost_dirs <<<"$candidates")
 
 if ((failures)); then
   echo "$failures sweep(s) failed" >&2

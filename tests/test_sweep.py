@@ -12,6 +12,14 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "cargo-sweep-timer"
 
 
+def tag_as_cargo_target(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n"
+        "# This file is a cache directory tag created by cargo.\n"
+    )
+
+
 class SweepTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="sweep-targets-")
@@ -144,7 +152,7 @@ class SweepTests(unittest.TestCase):
         self.stub_swept_dirs()
         nested = self.root / "untagged" / "target" / "project" / "target"
         nested.mkdir(parents=True)
-        (nested / "CACHEDIR.TAG").touch()
+        tag_as_cargo_target(nested)
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
@@ -154,9 +162,10 @@ class SweepTests(unittest.TestCase):
 
     def test_symlinked_target_dirs_are_swept(self):
         self.stub_swept_dirs()
-        destination = self.root / "elsewhere"
-        destination.mkdir()
-        (destination / "CACHEDIR.TAG").touch()
+        outside = tempfile.TemporaryDirectory(prefix="shared-target-")
+        self.addCleanup(outside.cleanup)
+        destination = Path(outside.name)
+        tag_as_cargo_target(destination)
         link = self.root / "linked" / "target"
         link.parent.mkdir()
         link.symlink_to(destination)
@@ -166,6 +175,119 @@ class SweepTests(unittest.TestCase):
             sorted(result.stdout.splitlines()),
             sorted([f"swept {self.root / 'project' / 'target'}", f"swept {link}"]),
         )
+
+    def test_target_dirs_of_any_name_are_swept(self):
+        self.stub_swept_dirs()
+        renamed = self.root / "project" / ".build" / "out"
+        tag_as_cargo_target(renamed)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            sorted([f"swept {self.root / 'project' / 'target'}", f"swept {renamed}"]),
+        )
+
+    def test_target_dirs_in_project_dirs_with_cargo_output_names_are_swept(self):
+        self.stub_swept_dirs()
+        nested = [self.root / "repo" / name / "target"
+                  for name in (".fingerprint", "incremental", "build", "deps", "doc")]
+        for directory in nested:
+            tag_as_cargo_target(directory)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            sorted([f"swept {self.root / 'project' / 'target'}"]
+                   + [f"swept {directory}" for directory in nested]),
+        )
+
+    def test_untagged_target_dirs_from_old_cargo_versions_are_swept(self):
+        self.stub_swept_dirs()
+        old = self.root / "old" / "target"
+        (old / "doc" / "locked").mkdir(parents=True, mode=0)
+        self.addCleanup((old / "doc" / "locked").chmod, 0o700)
+        (old / ".rustc_info.json").write_text("{}\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            sorted([f"swept {self.root / 'project' / 'target'}", f"swept {old}"]),
+        )
+
+    def test_cache_dirs_tagged_by_other_tools_are_not_swept(self):
+        self.stub_swept_dirs()
+        pytest_cache = self.root / "python" / ".pytest_cache"
+        pytest_cache.mkdir(parents=True)
+        (pytest_cache / "CACHEDIR.TAG").write_text(
+            "Signature: 8a477f597d28d172789f06886806bc55\n"
+            "# This file is a cache directory tag created by pytest, not created by cargo.\n"
+        )
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
+    def test_target_dirs_nested_in_a_target_dir_are_not_swept_again(self):
+        self.stub_swept_dirs()
+        outer = self.root / "project" / "target"
+        tag_as_cargo_target(outer / "issue-123")
+        (outer / "issue-123" / ".rustc_info.json").write_text("{}\n")
+        (outer / ".rustc_info.json").write_text("{}\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, f"swept {outer}\n")
+
+    def test_target_dirs_in_overlapping_settings_are_swept_once(self):
+        self.stub_swept_dirs()
+        project = self.root / "project"
+        self.env.update(
+            SWEEP_ROOTS=f"{self.root}:{project}", SWEEP_TARGET_DIRS=f"{project / 'target'}/"
+        )
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, f"swept {project / 'target'}\n")
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses file permission checks")
+    def test_unreadable_tag_reports_failure(self):
+        self.stub_swept_dirs()
+        locked = self.root / "locked" / "target"
+        tag_as_cargo_target(locked)
+        (locked / "CACHEDIR.TAG").chmod(0)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"cannot read tag: {locked / 'CACHEDIR.TAG'}", result.stderr)
+        self.assertIn("1 sweep(s) failed", result.stderr)
+        self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
+
+    def test_one_sweep_of_a_target_dir_cleans_the_target_dirs_nested_in_it(self):
+        project = self.create_project(self.root / "projects" / "project")
+        outer = project / "target"
+        artifacts = [
+            self.build_project(project, outer),
+            self.build_project(project, outer / "issue-123"),
+        ]
+        self.env["SWEEP_ROOTS"] = str(self.root / "projects")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(all(not path.exists() for path in artifacts))
+
+    @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
+    def test_cargo_internal_dirs_are_not_searched(self):
+        self.stub_swept_dirs()
+        target = self.root / "project" / "target"
+        internal_dirs = [
+            target / "debug" / name / "locked"
+            for name in ("incremental", ".fingerprint", "deps", "build")
+        ] + [target / "doc" / "locked"]
+        for directory in internal_dirs:
+            directory.mkdir(parents=True, mode=0)
+        (target / "debug" / ".cargo-lock").touch()
+        try:
+            result = self.run_script()
+        finally:
+            for directory in internal_dirs:
+                directory.chmod(0o700)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, f"swept {self.root / 'project' / 'target'}\n")
 
     @unittest.skipIf(os.geteuid() == 0, "Root bypasses directory permission checks")
     def test_unreadable_dir_in_a_root_reports_failure(self):
@@ -197,7 +319,7 @@ class SweepTests(unittest.TestCase):
         cargo.chmod(0o755)
         target = self.root / "project" / "target"
         target.mkdir(parents=True, exist_ok=True)
-        (target / "CACHEDIR.TAG").touch()
+        tag_as_cargo_target(target)
         self.env.update(PATH=f"{self.root}:{self.env['PATH']}", SWEEP_ROOTS=str(self.root))
 
     def test_failed_cargo_command_reports_failure(self):

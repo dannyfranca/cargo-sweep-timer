@@ -68,7 +68,7 @@ SWEEP_TARGET_DIRS="$HOME/.cache/my-shared-target:$HOME/.cache/other-target"
 | --- | --- | --- |
 | `SWEEP_TIME` | `10:00` | Daily sweep time, `HH:MM` in 24-hour local time. The installer reads it. |
 | `SWEEP_MAX_AGE` | `86400` | Remove artifacts not used for this many seconds. Use whole seconds only: `3600` (1 hour), `21600` (6 hours), `86400` (1 day), `604800` (7 days). |
-| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs. The search includes hidden dirs such as `.worktrees`. |
+| `SWEEP_ROOTS` | `~/git` | Dirs to search for Cargo target dirs of any name, at any depth. The search includes hidden dirs such as `.worktrees`. |
 | `SWEEP_TARGET_DIRS` | empty | Target dirs outside a project, for example a shared `CARGO_TARGET_DIR`. |
 | `DRY_RUN` | `0` | Set to `1` to show what the sweep would remove, without removing it. |
 
@@ -82,9 +82,18 @@ A low `SWEEP_MAX_AGE` value frees more disk space. The cost is that the next bui
 
 cargo-sweep uses the last access time of each artifact. Most Linux systems mount disks with `relatime`, which updates the access time at most once a day. With `noatime`, the access time does not change when a file is read. For this reason, a value below `86400` can remove artifacts that builds still use, and the next build compiles them again.
 
-The command fails if a configured root is missing, or if a dir in it cannot be read or searched.
+The command fails if a configured root is missing, if a dir in it cannot be read or searched, or if a `CACHEDIR.TAG` file in it cannot be read.
 
-In a root, the command sweeps each dir named `target` that contains the `CACHEDIR.TAG` file that Cargo writes. It does not load the projects, so a project that needs its own `.cargo/config.toml`, for example for a private registry, is swept too. A project that sets a different target dir name in its Cargo config is not found. Add that dir to `SWEEP_TARGET_DIRS`.
+In a root, the command sweeps each Cargo target dir. A dir is a Cargo target dir when it contains one of these files:
+
+- `CACHEDIR.TAG` that Cargo wrote. A `CACHEDIR.TAG` from a different tool does not count.
+- `.rustc_info.json`. Old Cargo versions wrote this file but no `CACHEDIR.TAG`.
+
+The dir name and the depth do not matter. Thus the command also finds a target dir that a build script or `CARGO_TARGET_DIR` puts in a different place, for example `target/issue-123` or `.build/target`. One sweep of a target dir also cleans the target dirs in it, so the command sweeps only the outermost target dir. This rule applies to all roots and to `SWEEP_TARGET_DIRS` together, thus each target dir gets one sweep only. The search does not go into the `incremental`, `.fingerprint`, `deps`, `build`, and `doc` dirs of a target dir, because they contain most of its files. The command searches a dir with one of these names that is not in a target dir.
+
+The command follows a symlink only when its name is `target` and it points to a dir with a Cargo `CACHEDIR.TAG`.
+
+The command does not load the projects, so a project that needs its own `.cargo/config.toml`, for example for a private registry, is swept too.
 
 ## Use on all systems
 

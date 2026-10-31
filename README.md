@@ -2,7 +2,7 @@
 
 Cargo does not delete old build artifacts. Each `target` dir grows until the disk is full. Worktrees make this worse, because each worktree has its own `target` dir.
 
-This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer on Linux, or a launchd agent on macOS. It removes artifacts that were not used for a set number of seconds.
+This tool runs [cargo-sweep](https://github.com/holmgr/cargo-sweep) every day from a systemd user timer on Linux, or a launchd agent on macOS. It removes artifacts that were not used for a set number of seconds. It also removes old incremental compile caches, because cargo-sweep does not remove them.
 
 The same `install.sh` and `uninstall.sh` operate on both systems. They find the system with `uname` and select the scheduler:
 
@@ -81,6 +81,8 @@ A low `SWEEP_MAX_AGE` value frees more disk space. The cost is that the next bui
 `SWEEP_MAX_AGE` replaces `SWEEP_DAYS`. If `SWEEP_DAYS` is set in the config or the environment, the command stops before it sweeps. Multiply the old value by `86400`, for example `SWEEP_DAYS=7` becomes `SWEEP_MAX_AGE=604800`.
 
 cargo-sweep uses the last access time of each artifact. Most Linux systems mount disks with `relatime`, which updates the access time at most once a day. With `noatime`, the access time does not change when a file is read. For this reason, a value below `86400` can remove artifacts that builds still use, and the next build compiles them again.
+
+cargo-sweep does not remove the `incremental` dirs of a target dir. These dirs can contain most of the disk space of a target dir. Each subdir of an `incremental` dir is the cache of one crate build variant, for example a test build or a build with different features. If no build uses a variant again, its cache stays. Thus, after each sweep, the command also removes each subdir of an `incremental` dir that was not changed for `SWEEP_MAX_AGE` seconds. Each compile adds a new session dir to the subdir, so the command uses the modification time, not the access time. `noatime` does not have an effect on this removal. The cost is one full compile of that crate at its next build. With `DRY_RUN=1`, the command shows the subdirs, but does not remove them.
 
 The command fails if a configured root is missing, if a dir in it cannot be read or searched, or if a `CACHEDIR.TAG` file in it cannot be read.
 

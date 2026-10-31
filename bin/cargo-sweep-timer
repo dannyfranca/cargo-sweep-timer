@@ -8,6 +8,7 @@ usage() {
 Usage: cargo-sweep-timer [--dry-run] [--help]
 
 Removes Cargo build artifacts not used for SWEEP_MAX_AGE seconds.
+Also removes incremental compile caches of crates not compiled for SWEEP_MAX_AGE seconds.
 
 Config file: \${CARGO_SWEEP_TIMER_CONFIG:-\${XDG_CONFIG_HOME:-~/.config}/cargo-sweep-timer/config.env}
 Variables already set in the environment override the config file.
@@ -128,6 +129,56 @@ sweep_target_dir() {
   CARGO_TARGET_DIR=$1 sweep "${sweep_args[@]}" "$anchor"
 }
 
+# cargo-sweep 0.8.0 never removes incremental dirs, because its fingerprints do not track them.
+# They can hold most of a target dir. Each subdir of an incremental dir is the cache of one crate
+# build variant, and a variant that is not built again stays forever. For each compile, rustc
+# makes a new session dir in the subdir, so the modification time of the subdir shows its last
+# use without a scan of its files, and does not depend on atime. -mmin counts whole minutes, so
+# the age rounds up and a cache stays a little longer, never shorter.
+remove_stale_incremental() {
+  local incremental_dirs incremental crate_dirs crate_dir kib count=0 total_kib=0 failed=0
+  local age=()
+  ((10#$SWEEP_MAX_AGE > 0)) && age=(-mmin "+$(( (10#$SWEEP_MAX_AGE + 59) / 60 ))")
+  # The trailing slash follows a target dir that is a symlink.
+  if ! incremental_dirs=$(find "$1/" \
+    \( -name .fingerprint -o -name deps -o -name build \) -type d \
+    -exec test -e {}/../.cargo-lock \; -prune -o \
+    -name doc -type d -exec test -e {}/../CACHEDIR.TAG -o -e {}/../.rustc_info.json \; -prune -o \
+    -name incremental -type d -exec test -e {}/../.cargo-lock \; -prune -print); then
+    echo "could not search all of target dir: $1" >&2
+    failed=1
+  fi
+  while IFS= read -r incremental; do
+    [[ -z $incremental ]] && continue
+    if ! crate_dirs=$(find "$incremental" -mindepth 1 -maxdepth 1 -type d ${age[@]+"${age[@]}"}); then
+      echo "could not search incremental dir: $incremental" >&2
+      failed=1
+    fi
+    while IFS= read -r crate_dir; do
+      [[ -z $crate_dir ]] && continue
+      # du fails on an unreadable subdir but still prints a size. The size is only for the log.
+      kib=$(du -sk "$crate_dir" 2>/dev/null | cut -f1) || true
+      if [[ $DRY_RUN == 1 ]]; then
+        echo "Would remove: $crate_dir"
+      elif ! rm -rf "$crate_dir"; then
+        echo "could not remove: $crate_dir" >&2
+        failed=1
+        continue
+      fi
+      count=$((count + 1))
+      total_kib=$((total_kib + ${kib:-0}))
+    done <<<"$crate_dirs"
+  done <<<"$incremental_dirs"
+  if ((count)); then
+    local verb=Removed
+    [[ $DRY_RUN == 1 ]] && verb="Would remove"
+    printf '[INFO] %s %d incremental crate dir(s), %s GiB, from "%s"\n' "$verb" "$count" \
+      "$(awk -v kib="$total_kib" 'BEGIN { printf "%.2f", kib / 1048576 }')" "$1"
+  fi
+  ((failed)) && failures=$((failures + 1))
+  return 0
+}
+
 # Other tools such as pytest also write CACHEDIR.TAG. An unreadable tag can belong to Cargo,
 # so it is a failure and not a foreign tag.
 cargo_target_dirs() {
@@ -214,7 +265,9 @@ done
 
 # Roots can overlap, and a configured target dir can also be in a root.
 while IFS= read -r target_dir; do
-  [[ -n $target_dir ]] && sweep_target_dir "$target_dir"
+  [[ -z $target_dir ]] && continue
+  sweep_target_dir "$target_dir"
+  remove_stale_incremental "$target_dir"
 done < <(outermost_dirs <<<"$candidates")
 
 if ((failures)); then
